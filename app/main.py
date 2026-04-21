@@ -117,12 +117,14 @@ def safe_jsonable(obj: Any) -> Any:
         return [safe_jsonable(v) for v in obj]
     if isinstance(obj, tuple):
         return [safe_jsonable(v) for v in obj]
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
     if isinstance(obj, pd.Timestamp):
         return obj.isoformat()
     if isinstance(obj, datetime):
         return obj.isoformat()
-    if isinstance(obj, float) and math.isnan(obj):
-        return None
     return obj
 
 # -----------------------------------------------------------------------------
@@ -864,7 +866,8 @@ async def validate_eoc(file: UploadFile = File(...)) -> JSONResponse:
     xls = open_excel_from_bytes(content)
     result = build_mapped_values(xls)
 
-    return JSONResponse(content=safe_jsonable(result))
+   clean_result = safe_jsonable(result)
+return JSONResponse(content=clean_result)
 
 @app.post("/generate-ppt")
 async def generate_ppt(
