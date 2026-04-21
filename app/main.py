@@ -554,10 +554,11 @@ def health():
 @app.post("/validate-eoc")
 async def validate_eoc(
     eoc_file: UploadFile = File(...),
-    template_file: UploadFile | None = File(None),
 ):
     if not RULES_WORKBOOK.exists():
         raise HTTPException(status_code=500, detail="Rules workbook not found in assets/")
+
+    template_path = DEFAULT_TEMPLATE
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -565,13 +566,6 @@ async def validate_eoc(
         eoc_path = tmp / eoc_file.filename
         with eoc_path.open("wb") as f:
             shutil.copyfileobj(eoc_file.file, f)
-
-        if template_file:
-            template_path = tmp / template_file.filename
-            with template_path.open("wb") as f:
-                shutil.copyfileobj(template_file.file, f)
-        else:
-            template_path = DEFAULT_TEMPLATE
 
         rules_config = load_rules_config(RULES_WORKBOOK)
         mapped, logs = map_eoc(eoc_path, template_path, rules_config)
@@ -581,10 +575,11 @@ async def validate_eoc(
 @app.post("/generate-exec-summary")
 async def generate_exec_summary(
     eoc_file: UploadFile = File(...),
-    template_file: UploadFile | None = File(None),
 ):
     if not RULES_WORKBOOK.exists():
         raise HTTPException(status_code=500, detail="Rules workbook not found in assets/")
+
+    template_path = DEFAULT_TEMPLATE
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -592,13 +587,6 @@ async def generate_exec_summary(
         eoc_path = tmp / eoc_file.filename
         with eoc_path.open("wb") as f:
             shutil.copyfileobj(eoc_file.file, f)
-
-        if template_file:
-            template_path = tmp / template_file.filename
-            with template_path.open("wb") as f:
-                shutil.copyfileobj(template_file.file, f)
-        else:
-            template_path = DEFAULT_TEMPLATE
 
         rules_config = load_rules_config(RULES_WORKBOOK)
         mapped, logs = map_eoc(eoc_path, template_path, rules_config)
