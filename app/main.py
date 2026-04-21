@@ -5,15 +5,14 @@ import shutil
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import openpyxl
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 from pptx import Presentation
 
-app = FastAPI(title="PCA Automation API", version="2.0.0")
+app = FastAPI(title="PCA Automation API", version="2.1.0")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = BASE_DIR / "outputs"
@@ -50,16 +49,8 @@ def fmt_cur(value: Any, absolute: bool = True) -> str:
     return f"€{value:,.2f}"
 
 # -------------------------
-# Table helpers
+# Workbook helpers
 # -------------------------
-def collect_rows(ws, start_row: int) -> List[int]:
-    rows = []
-    r = start_row
-    while r <= ws.max_row and ws.cell(r, 2).value not in (None, ""):
-        rows.append(r)
-        r += 1
-    return rows
-
 def row_labels(ws) -> Dict[str, List[int]]:
     labels: Dict[str, List[int]] = {}
     for r in range(1, ws.max_row + 1):
@@ -68,83 +59,215 @@ def row_labels(ws) -> Dict[str, List[int]]:
             labels.setdefault(label, []).append(r)
     return labels
 
+def collect_rows(ws, start_row: int) -> List[int]:
+    rows = []
+    r = start_row
+    while r <= ws.max_row and ws.cell(r, 2).value not in (None, ""):
+        rows.append(r)
+        r += 1
+    return rows
+
 def header_map(ws, row: int) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for c in range(2, ws.max_column + 1):
-        val = ws.cell(row, c).value
-        if val not in (None, ""):
-            out[norm(val)] = c
+        value = ws.cell(row, c).value
+        if value not in (None, ""):
+            out[norm(value)] = c
     return out
 
-def find_column(hmap: Dict[str, int], tokens: List[List[str]]) -> Optional[int]:
-    for group in tokens:
-        for h, col in hmap.items():
-            if all(t in h for t in group):
+def find_column(hmap: Dict[str, int], token_groups: List[List[str]]) -> Optional[int]:
+    for tokens in token_groups:
+        for header, col in hmap.items():
+            if all(token in header for token in tokens):
                 return col
     return None
 
 # -------------------------
-# Token rules
+# Detection rules
 # -------------------------
-KPI = {
+KPI_TOKENS = {
+    "campaign_name": [["campaign"]],
     "impressions": [["impressions"]],
     "ctr": [["ctr"]],
-    "er": [["engagement", "rate"]],
-    "vcr": [["vcr"], ["completion"]],
-    "view": [["viewability"], ["on", "screen"]],
-    "spend": [["spend"]],
+    "engagement_rate": [["engagement", "rate"], ["er"]],
+    "vcr": [["video", "completion", "rate"], ["vcr"], ["completion"]],
+    "on_screen": [["mobkoi", "on", "screen"], ["on", "screen"], ["viewability"]],
+    "spend": [["actual", "spend"], ["spend"], ["total", "spend"], ["budget"]],
 }
 
-DELIVERY = {
-    "io": [["sold"]],
-    "av": [["av"]],
-    "pct": [["delivery"]],
-}
+def detect_brand(filename: str, campaign_name: Optional[str] = None) -> str:
+    stem = Path(filename).stem
+    if " - " in stem:
+        first = stem.split(" - ")[0].strip()
+        if first:
+            return first
+    if campaign_name:
+        words = str(campaign_name).split()
+        if words:
+            return words[0]
+    return "N/A"
+
+def detect_date_range_from_table(ws, header_row: Optional[int]) -> tuple[Optional[datetime], Optional[datetime]]:
+    if not header_row:
+        return None, None
+
+    dates = []
+    for r in collect_rows(ws, header_row + 1):
+        value = ws.cell(r, 2).value
+        if isinstance(value, datetime):
+            dates.append(value)
+
+    if not dates:
+        return None, None
+
+    return min(dates), max(dates)
+
+def fallback_weekly_dates(filename: str) -> tuple[Optional[datetime], Optional[datetime]]:
+    match = re.search(r"(\\d{2})\\.(\\d{2})\\.(\\d{4})", filename)
+    if not match:
+        return None, None
+
+    # weekly fallback:
+    # filename date treated as day after final day in prior tests
+    end = datetime(int(match.group(3)), int(match.group(2)), int(match.group(1))) - timedelta(days=1)
+    start = end - timedelta(days=6)
+    return start, end
 
 # -------------------------
-# Core mapping
+# Core mapping - Phase 1
 # -------------------------
-def map_eoc(eoc_path: Path) -> Dict[str, str]:
+def map_eoc_phase1(eoc_path: Path) -> Dict[str, str]:
     wb = openpyxl.load_workbook(eoc_path, data_only=True)
-    ws = wb.active
+    ws = wb["Consolidated Report"] if "Consolidated Report" in wb.sheetnames else wb.active
 
     labels = row_labels(ws)
-    campaign_row = labels.get("campaign", [None])[0]
+    campaign_rows = labels.get("campaign", [])
+    geo_rows = labels.get("geo", []) or labels.get("market", []) or labels.get("country", []) or labels.get("region", [])
+    format_rows = labels.get("format", [])
+    date_rows = labels.get("date", [])
 
-    mapped = {}
+    mapped: Dict[str, str] = {}
 
-    if campaign_row:
-        hmap = header_map(ws, campaign_row)
-        r = campaign_row + 1
+    # -------------------------
+    # Campaign / KPI table
+    # Phase 1: use first campaign-like KPI table found
+    # -------------------------
+    campaign_header = None
+    best_score = -1
 
-        mapped["{{CAMPAIGN_NAME}}"] = str(ws.cell(r, 2).value or "N/A")
-        mapped["{{DELIVERED_IMPRESSIONS}}"] = fmt_int(ws.cell(r, find_column(hmap, KPI["impressions"]) or 0).value)
-        mapped["{{PERFORMANCE_CTR}}"] = fmt_pct(ws.cell(r, find_column(hmap, KPI["ctr"]) or 0).value)
-        mapped["{{PERFORMANCE_ENGAGEMENT_RATE}}"] = fmt_pct(ws.cell(r, find_column(hmap, KPI["er"]) or 0).value)
-        mapped["{{PERFORMANCE_VCR}}"] = fmt_pct(ws.cell(r, find_column(hmap, KPI["vcr"]) or 0).value)
-        mapped["{{PERFORMANCE_ON_SCREEN}}"] = fmt_pct(ws.cell(r, find_column(hmap, KPI["view"]) or 0).value)
-        mapped["{{CAMPAIGN_BUDGET}}"] = fmt_cur(ws.cell(r, find_column(hmap, KPI["spend"]) or 0).value)
+    for row in campaign_rows:
+        hmap = header_map(ws, row)
+        score = 0
+        for key in ["impressions", "ctr", "vcr", "spend"]:
+            if find_column(hmap, KPI_TOKENS[key]) is not None:
+                score += 1
+        if score > best_score:
+            best_score = score
+            campaign_header = row
+
+    campaign_name_raw = None
+    if campaign_header:
+        hmap = header_map(ws, campaign_header)
+        data_row = campaign_header + 1
+
+        campaign_name_raw = ws.cell(data_row, 2).value
+        mapped["{{CAMPAIGN_NAME}}"] = str(campaign_name_raw or "N/A")
+
+        impressions_col = find_column(hmap, KPI_TOKENS["impressions"])
+        ctr_col = find_column(hmap, KPI_TOKENS["ctr"])
+        er_col = find_column(hmap, KPI_TOKENS["engagement_rate"])
+        vcr_col = find_column(hmap, KPI_TOKENS["vcr"])
+        on_screen_col = find_column(hmap, KPI_TOKENS["on_screen"])
+        spend_col = find_column(hmap, KPI_TOKENS["spend"])
+
+        mapped["{{DELIVERED_IMPRESSIONS}}"] = fmt_int(ws.cell(data_row, impressions_col or 0).value)
+        mapped["{{PERFORMANCE_CTR}}"] = fmt_pct(ws.cell(data_row, ctr_col or 0).value, 2)
+        mapped["{{PERFORMANCE_ENGAGEMENT_RATE}}"] = fmt_pct(ws.cell(data_row, er_col or 0).value, 2)
+        mapped["{{PERFORMANCE_VCR}}"] = fmt_pct(ws.cell(data_row, vcr_col or 0).value, 1)
+        mapped["{{PERFORMANCE_ON_SCREEN}}"] = fmt_pct(ws.cell(data_row, on_screen_col or 0).value, 1)
+        mapped["{{CAMPAIGN_BUDGET}}"] = fmt_cur(ws.cell(data_row, spend_col or 0).value)
     else:
-        for k in [
-            "{{CAMPAIGN_NAME}}",
-            "{{DELIVERED_IMPRESSIONS}}",
-            "{{PERFORMANCE_CTR}}",
-            "{{PERFORMANCE_ENGAGEMENT_RATE}}",
-            "{{PERFORMANCE_VCR}}",
-            "{{PERFORMANCE_ON_SCREEN}}",
-            "{{CAMPAIGN_BUDGET}}",
-        ]:
-            mapped[k] = "N/A"
+        mapped["{{CAMPAIGN_NAME}}"] = "N/A"
+        mapped["{{DELIVERED_IMPRESSIONS}}"] = "N/A"
+        mapped["{{PERFORMANCE_CTR}}"] = "N/A"
+        mapped["{{PERFORMANCE_ENGAGEMENT_RATE}}"] = "N/A"
+        mapped["{{PERFORMANCE_VCR}}"] = "N/A"
+        mapped["{{PERFORMANCE_ON_SCREEN}}"] = "N/A"
+        mapped["{{CAMPAIGN_BUDGET}}"] = "N/A"
 
-    # Simple dates fallback
-    mapped["{{CAMPAIGN_PERIOD}}"] = "Q1 2026"
+    # -------------------------
+    # Phase 1 leaves AV fields unresolved
+    # -------------------------
+    for key in [
+        "{{IO_OVERALL_IMPRESSIONS}}",
+        "{{ADDED_VALUE_IMPRESSIONS}}",
+        "{{DELIVERED_OVERALL_AV_UNITS}}",
+        "{{DELIVERY_WITH_AV_PERCENT}}",
+        "{{ADDED_VALUE_WORTH}}",
+    ]:
+        mapped[key] = "N/A"
+
+    # -------------------------
+    # Dates
+    # -------------------------
+    start_date, end_date = detect_date_range_from_table(ws, date_rows[0] if date_rows else None)
+    if start_date is None or end_date is None:
+        start_date, end_date = fallback_weekly_dates(eoc_path.name)
+
+    if start_date and end_date:
+        mapped["{{LIVE_DATES_FULL}}"] = f"{start_date.strftime('%d %B')} - {end_date.strftime('%d %B %Y')}"
+        mapped["{{LIVE_DATES_SHORT}}"] = f"{start_date.strftime('%d %b')} - {end_date.strftime('%d %b')}"
+        mapped["{{CAMPAIGN_PERIOD}}"] = f"Q{((start_date.month - 1) // 3) + 1} {start_date.year}"
+    else:
+        mapped["{{LIVE_DATES_FULL}}"] = "N/A"
+        mapped["{{LIVE_DATES_SHORT}}"] = "N/A"
+        mapped["{{CAMPAIGN_PERIOD}}"] = "N/A"
+
+    # -------------------------
+    # Formats
+    # -------------------------
+    if format_rows:
+        values = [
+            str(ws.cell(r, 2).value)
+            for r in collect_rows(ws, format_rows[0] + 1)
+            if ws.cell(r, 2).value not in (None, "")
+        ]
+        mapped["{{CAMPAIGN_FORMATS}}"] = ", ".join(values) if values else "N/A"
+    else:
+        mapped["{{CAMPAIGN_FORMATS}}"] = "N/A"
+
+    # -------------------------
+    # Markets
+    # -------------------------
+    if geo_rows:
+        values = [
+            str(ws.cell(r, 2).value)
+            for r in collect_rows(ws, geo_rows[0] + 1)
+            if ws.cell(r, 2).value not in (None, "")
+        ]
+        mapped["{{CAMPAIGN_MARKETS}}"] = ", ".join(values) if values else "N/A"
+    else:
+        mapped["{{CAMPAIGN_MARKETS}}"] = "N/A"
+
+    # -------------------------
+    # Brand / client
+    # -------------------------
+    mapped["{{CLIENT_NAME}}"] = detect_brand(eoc_path.name, str(campaign_name_raw) if campaign_name_raw else None)
+
+    # -------------------------
+    # Phase 1 leaves Top Titles unresolved
+    # -------------------------
+    for prefix in ["CTR", "ER", "VCR"]:
+        for i in range(1, 6):
+            mapped[f"{{{{TOP_TITLES_{prefix}_{i}_NAME}}}}"] = "N/A"
+            mapped[f"{{{{TOP_TITLES_{prefix}_{i}_VALUE}}}}"] = "N/A"
 
     return mapped
 
 # -------------------------
-# FIXED REPLACEMENT FUNCTION
+# PPT replacement
 # -------------------------
-def replace_placeholders(template_path: Path, out_path: Path, repl: Dict[str, str]):
+def replace_placeholders(template_path: Path, out_path: Path, repl: Dict[str, str]) -> None:
     prs = Presentation(str(template_path))
 
     def replace_in_text_frame(tf):
@@ -171,7 +294,7 @@ def replace_placeholders(template_path: Path, out_path: Path, repl: Dict[str, st
                     for row in shape.table.rows:
                         for cell in row.cells:
                             replace_in_text_frame(cell.text_frame)
-                except:
+                except Exception:
                     pass
 
     prs.save(str(out_path))
@@ -182,6 +305,18 @@ def replace_placeholders(template_path: Path, out_path: Path, repl: Dict[str, st
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.post("/validate-eoc")
+async def validate_eoc(eoc_file: UploadFile = File(...)):
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+
+        eoc_path = tmp / eoc_file.filename
+        with eoc_path.open("wb") as f:
+            shutil.copyfileobj(eoc_file.file, f)
+
+        mapped = map_eoc_phase1(eoc_path)
+        return JSONResponse(content=mapped)
 
 @app.post("/generate-exec-summary")
 async def generate_exec_summary(
@@ -200,13 +335,16 @@ async def generate_exec_summary(
         with template_path.open("wb") as f:
             shutil.copyfileobj(template_file.file, f)
 
-        mapped = map_eoc(eoc_path)
+        mapped = map_eoc_phase1(eoc_path)
 
         out_path = tmp / "output.pptx"
         replace_placeholders(template_path, out_path, mapped)
 
+        final_path = OUTPUT_DIR / "Exec_Summary_Output.pptx"
+        shutil.copy2(out_path, final_path)
+
         return FileResponse(
-            path=str(out_path),
+            path=str(final_path),
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             filename="Exec_Summary.pptx",
         )
