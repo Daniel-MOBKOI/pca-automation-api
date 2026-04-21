@@ -12,7 +12,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pptx import Presentation
 
-app = FastAPI(title="PCA Automation API", version="3.0.0")
+app = FastAPI(title="PCA Automation API", version="4.0.0")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = BASE_DIR / "outputs"
@@ -20,6 +20,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 ASSETS_DIR = BASE_DIR / "assets"
 DEFAULT_TEMPLATE = ASSETS_DIR / "Executive Summary_PCA_One Pager_MASTER.pptx"
+RULES_WORKBOOK = ASSETS_DIR / "PCA_GPT_Rules_Master.xlsx"
 
 
 # -------------------------
@@ -55,6 +56,80 @@ def fmt_cur(value: Any, absolute: bool = True) -> str:
     if absolute:
         value = abs(value)
     return f"€{value:,.2f}"
+
+
+# -------------------------
+# Rules workbook loader
+# -------------------------
+def load_rules_config(rules_path: Path) -> Dict[str, Any]:
+    """
+    Reads the rules workbook as the source of truth for:
+    - expected placeholders
+    - validation fields
+    - optional aliases or rule text if present
+
+    Because the workbook is human-readable, not a strict schema,
+    this function extracts what it can and the Python engine
+    performs the actual execution logic.
+    """
+    config: Dict[str, Any] = {
+        "expected_placeholders": set(),
+        "required_placeholders": set(),
+        "notes": [],
+        "sheets": [],
+    }
+
+    if not rules_path.exists():
+        return config
+
+    wb = openpyxl.load_workbook(rules_path, data_only=True)
+
+    placeholder_pattern = re.compile(r"\{\{[A-Z0-9_]+\}\}")
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        config["sheets"].append(sheet_name)
+
+        for row in ws.iter_rows(values_only=True):
+            for cell in row:
+                if cell is None:
+                    continue
+                text = str(cell)
+                matches = placeholder_pattern.findall(text)
+                for match in matches:
+                    config["expected_placeholders"].add(match)
+
+                lower = text.strip().lower()
+
+                # Required / validation hints
+                if any(term in lower for term in [
+                    "campaign name",
+                    "campaign period",
+                    "delivered impressions",
+                    "actual spend",
+                    "spend mapping",
+                    "performance ctr",
+                    "performance vcr",
+                ]):
+                    for match in matches:
+                        config["required_placeholders"].add(match)
+
+                # Keep notes for debugging
+                if "rule" in lower or "validation" in lower or "fallback" in lower:
+                    config["notes"].append(text)
+
+    # Hard safety defaults if workbook doesn't explicitly expose these
+    defaults = {
+        "{{CAMPAIGN_NAME}}",
+        "{{CAMPAIGN_PERIOD}}",
+        "{{DELIVERED_IMPRESSIONS}}",
+        "{{PERFORMANCE_CTR}}",
+        "{{PERFORMANCE_VCR}}",
+        "{{CAMPAIGN_BUDGET}}",
+    }
+    config["required_placeholders"] = config["required_placeholders"] | defaults
+
+    return config
 
 
 # -------------------------
@@ -96,14 +171,14 @@ def find_column(hmap: Dict[str, int], token_groups: List[List[str]]) -> Optional
 
 
 # -------------------------
-# Detection rules
+# Rule-driven token config
 # -------------------------
 KPI_TOKENS = {
     "impressions": [["impressions"]],
     "ctr": [["ctr"], ["click", "through"]],
-    "engagement_rate": [["engagement", "rate"], ["er"]],
-    "vcr": [["video", "completion", "rate"], ["vcr"], ["completed", "view", "rate"]],
-    "on_screen": [["mobkoi", "on", "screen"], ["on", "screen"], ["viewability"], ["viewable", "rate"]],
+    "engagement_rate": [["engagement", "rate"], ["engagement", "%"], ["er"], ["total", "er"], ["overall", "er"]],
+    "vcr": [["video", "completion", "rate"], ["vcr"], ["completed", "view", "rate"], ["video", "%", "complete"]],
+    "on_screen": [["mobkoi", "on", "screen"], ["on", "screen"], ["on-screen"], ["viewability"], ["viewable", "rate"]],
     "spend": [["actual", "spend"], ["spend"], ["total", "spend"], ["budget"]],
 }
 
@@ -111,7 +186,7 @@ DELIVERY_TOKENS = {
     "io_overall_impressions": [["sold", "paid", "units"]],
     "delivered_overall_av_units": [["delivered", "overall", "av", "units"], ["delivered", "overall", "av"]],
     "delivery_with_av_percent": [["delivery", "percentage", "incl", "av"], ["delivery", "incl", "av"]],
-    "added_value_worth": [["delivered", "av", "amount"], ["av", "amount"]],
+    "added_value_worth": [["delivered", "av", "amount"], ["av", "amount"], ["delivered", "av", "amount", "currency"]],
 }
 
 SITE_TOKENS = {
@@ -123,16 +198,16 @@ SITE_TOKENS = {
 
 def score_kpi_table(hmap: Dict[str, int]) -> int:
     score = 0
-    for groups in KPI_TOKENS.values():
-        if find_column(hmap, groups) is not None:
+    for key in ["impressions", "ctr", "engagement_rate", "vcr", "on_screen", "spend"]:
+        if find_column(hmap, KPI_TOKENS[key]) is not None:
             score += 1
     return score
 
 
 def score_delivery_table(hmap: Dict[str, int]) -> int:
     score = 0
-    for groups in DELIVERY_TOKENS.values():
-        if find_column(hmap, groups) is not None:
+    for key in ["io_overall_impressions", "delivered_overall_av_units", "delivery_with_av_percent", "added_value_worth"]:
+        if find_column(hmap, DELIVERY_TOKENS[key]) is not None:
             score += 1
     return score
 
@@ -170,11 +245,12 @@ def detect_date_range_from_table(ws, header_row: Optional[int]) -> Tuple[Optiona
 
 
 def fallback_weekly_dates(filename: str) -> Tuple[Optional[datetime], Optional[datetime]]:
-    match = re.search(r"(\\d{2})\\.(\\d{2})\\.(\\d{4})", filename)
+    match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", filename)
     if not match:
         return None, None
 
-    # weekly fallback proven from Church's
+    # Weekly report fallback proven in testing:
+    # use filename date minus 1 day as weekly end date
     end = datetime(int(match.group(3)), int(match.group(2)), int(match.group(1))) - timedelta(days=1)
     start = end - timedelta(days=6)
     return start, end
@@ -183,7 +259,7 @@ def fallback_weekly_dates(filename: str) -> Tuple[Optional[datetime], Optional[d
 def detect_placeholders_in_ppt(template_path: Path) -> set[str]:
     prs = Presentation(str(template_path))
     found = set()
-    pattern = re.compile(r"\\{\\{[A-Z0-9_]+\\}\\}")
+    pattern = re.compile(r"\{\{[A-Z0-9_]+\}\}")
 
     def scan_text_frame(tf):
         for p in tf.paragraphs:
@@ -209,7 +285,7 @@ def detect_placeholders_in_ppt(template_path: Path) -> set[str]:
 # -------------------------
 # Core mapping engine
 # -------------------------
-def map_eoc(eoc_path: Path, template_path: Optional[Path] = None) -> Tuple[Dict[str, str], Dict[str, Any]]:
+def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]:
     wb = openpyxl.load_workbook(eoc_path, data_only=True)
     ws = wb["Consolidated Report"] if "Consolidated Report" in wb.sheetnames else wb.active
 
@@ -227,12 +303,13 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path] = None) -> Tuple[Dict[
         "site_rows": site_rows,
         "date_rows": date_rows,
         "warnings": [],
+        "rules_sheets": rules_config.get("sheets", []),
     }
 
     mapped: Dict[str, str] = {}
 
     # -------------------------
-    # Detect KPI / Delivery tables
+    # Detect KPI / Delivery campaign tables
     # -------------------------
     kpi_header = None
     delivery_header = None
@@ -252,7 +329,7 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path] = None) -> Tuple[Dict[
             best_delivery_score = delivery_score
             delivery_header = row
 
-    # split if both selected same row but multiple campaign tables exist
+    # If same table selected for both but multiple campaign tables exist, separate them
     if kpi_header == delivery_header and len(campaign_rows) > 1:
         for row in campaign_rows:
             if row != kpi_header and score_delivery_table(header_map(ws, row)) > 0:
@@ -273,19 +350,12 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path] = None) -> Tuple[Dict[
         campaign_name_raw = ws.cell(data_row, 2).value
         mapped["{{CAMPAIGN_NAME}}"] = str(campaign_name_raw or "N/A")
 
-        impressions_col = find_column(hmap, KPI_TOKENS["impressions"])
-        ctr_col = find_column(hmap, KPI_TOKENS["ctr"])
-        er_col = find_column(hmap, KPI_TOKENS["engagement_rate"])
-        vcr_col = find_column(hmap, KPI_TOKENS["vcr"])
-        on_screen_col = find_column(hmap, KPI_TOKENS["on_screen"])
-        spend_col = find_column(hmap, KPI_TOKENS["spend"])
-
-        mapped["{{DELIVERED_IMPRESSIONS}}"] = fmt_int(ws.cell(data_row, impressions_col or 0).value)
-        mapped["{{PERFORMANCE_CTR}}"] = fmt_pct(ws.cell(data_row, ctr_col or 0).value, 2)
-        mapped["{{PERFORMANCE_ENGAGEMENT_RATE}}"] = fmt_pct(ws.cell(data_row, er_col or 0).value, 2)
-        mapped["{{PERFORMANCE_VCR}}"] = fmt_pct(ws.cell(data_row, vcr_col or 0).value, 1)
-        mapped["{{PERFORMANCE_ON_SCREEN}}"] = fmt_pct(ws.cell(data_row, on_screen_col or 0).value, 1)
-        mapped["{{CAMPAIGN_BUDGET}}"] = fmt_cur(ws.cell(data_row, spend_col or 0).value)
+        mapped["{{DELIVERED_IMPRESSIONS}}"] = fmt_int(ws.cell(data_row, find_column(hmap, KPI_TOKENS["impressions"]) or 0).value)
+        mapped["{{PERFORMANCE_CTR}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["ctr"]) or 0).value, 2)
+        mapped["{{PERFORMANCE_ENGAGEMENT_RATE}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["engagement_rate"]) or 0).value, 2)
+        mapped["{{PERFORMANCE_VCR}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["vcr"]) or 0).value, 1)
+        mapped["{{PERFORMANCE_ON_SCREEN}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["on_screen"]) or 0).value, 1)
+        mapped["{{CAMPAIGN_BUDGET}}"] = fmt_cur(ws.cell(data_row, find_column(hmap, KPI_TOKENS["spend"]) or 0).value)
     else:
         logs["warnings"].append("No KPI table found")
         for key in [
@@ -306,15 +376,10 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path] = None) -> Tuple[Dict[
         hmap = header_map(ws, delivery_header)
         data_row = delivery_header + 1
 
-        io_col = find_column(hmap, DELIVERY_TOKENS["io_overall_impressions"])
-        av_col = find_column(hmap, DELIVERY_TOKENS["delivered_overall_av_units"])
-        pct_col = find_column(hmap, DELIVERY_TOKENS["delivery_with_av_percent"])
-        worth_col = find_column(hmap, DELIVERY_TOKENS["added_value_worth"])
-
-        io_val = ws.cell(data_row, io_col or 0).value
-        av_val = ws.cell(data_row, av_col or 0).value
-        pct_val = ws.cell(data_row, pct_col or 0).value
-        worth_val = ws.cell(data_row, worth_col or 0).value
+        io_val = ws.cell(data_row, find_column(hmap, DELIVERY_TOKENS["io_overall_impressions"]) or 0).value
+        av_val = ws.cell(data_row, find_column(hmap, DELIVERY_TOKENS["delivered_overall_av_units"]) or 0).value
+        pct_val = ws.cell(data_row, find_column(hmap, DELIVERY_TOKENS["delivery_with_av_percent"]) or 0).value
+        worth_val = ws.cell(data_row, find_column(hmap, DELIVERY_TOKENS["added_value_worth"]) or 0).value
 
         mapped["{{IO_OVERALL_IMPRESSIONS}}"] = fmt_int(io_val)
         mapped["{{ADDED_VALUE_IMPRESSIONS}}"] = fmt_int(av_val, absolute=True)
@@ -338,7 +403,7 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path] = None) -> Tuple[Dict[
     if start_date is None or end_date is None:
         start_date, end_date = fallback_weekly_dates(eoc_path.name)
         if start_date and end_date:
-            logs["warnings"].append("Used filename fallback for dates")
+            logs["warnings"].append("Used weekly filename fallback for dates")
 
     if start_date and end_date:
         mapped["{{LIVE_DATES_FULL}}"] = f"{start_date.strftime('%d %B')} - {end_date.strftime('%d %B %Y')}"
@@ -376,7 +441,7 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path] = None) -> Tuple[Dict[
         mapped["{{CAMPAIGN_MARKETS}}"] = "N/A"
 
     # -------------------------
-    # Brand / client
+    # Brand / Client
     # -------------------------
     mapped["{{CLIENT_NAME}}"] = detect_brand(eoc_path.name, str(campaign_name_raw) if campaign_name_raw else None)
 
@@ -428,6 +493,13 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path] = None) -> Tuple[Dict[
                 mapped[f"{{{{TOP_TITLES_{prefix}_{i}_NAME}}}}"] = "N/A"
                 mapped[f"{{{{TOP_TITLES_{prefix}_{i}_VALUE}}}}"] = "N/A"
 
+    # -------------------------
+    # Validation against rules workbook
+    # -------------------------
+    required = set(rules_config.get("required_placeholders", set()))
+    unresolved_required = [placeholder for placeholder in required if mapped.get(placeholder, "N/A") == "N/A"]
+    logs["unresolved_required"] = sorted(unresolved_required)
+
     return mapped, logs
 
 
@@ -472,7 +544,11 @@ def replace_placeholders(template_path: Path, out_path: Path, repl: Dict[str, st
 # -------------------------
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "rules_workbook_found": RULES_WORKBOOK.exists(),
+        "default_template_found": DEFAULT_TEMPLATE.exists(),
+    }
 
 
 @app.post("/validate-eoc")
@@ -480,6 +556,9 @@ async def validate_eoc(
     eoc_file: UploadFile = File(...),
     template_file: UploadFile | None = File(None),
 ):
+    if not RULES_WORKBOOK.exists():
+        raise HTTPException(status_code=500, detail="Rules workbook not found in assets/")
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
 
@@ -494,7 +573,8 @@ async def validate_eoc(
         else:
             template_path = DEFAULT_TEMPLATE
 
-        mapped, logs = map_eoc(eoc_path, template_path)
+        rules_config = load_rules_config(RULES_WORKBOOK)
+        mapped, logs = map_eoc(eoc_path, template_path, rules_config)
         return JSONResponse(content={"mapped_values": mapped, "logs": logs})
 
 
@@ -503,6 +583,9 @@ async def generate_exec_summary(
     eoc_file: UploadFile = File(...),
     template_file: UploadFile | None = File(None),
 ):
+    if not RULES_WORKBOOK.exists():
+        raise HTTPException(status_code=500, detail="Rules workbook not found in assets/")
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
 
@@ -517,7 +600,8 @@ async def generate_exec_summary(
         else:
             template_path = DEFAULT_TEMPLATE
 
-        mapped, logs = map_eoc(eoc_path, template_path)
+        rules_config = load_rules_config(RULES_WORKBOOK)
+        mapped, logs = map_eoc(eoc_path, template_path, rules_config)
 
         out_path = tmp / "output.pptx"
         replace_placeholders(template_path, out_path, mapped)
