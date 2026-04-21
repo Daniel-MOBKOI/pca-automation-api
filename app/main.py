@@ -603,14 +603,15 @@ async def generate_exec_summary(eoc_file: UploadFile = File(...)):
             out_path = tmp / "output.pptx"
             replace_placeholders(template_path, out_path, mapped)
 
-            final = OUTPUT_DIR / "Exec_Summary_Output.pptx"
-            shutil.copy2(out_path, final)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+final = OUTPUT_DIR / f"Exec_Summary_Output_{timestamp}.pptx"
+shutil.copy2(out_path, final)
 
-            return FileResponse(
-                path=str(final),
-                media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                filename="Exec_Summary_Output.pptx",
-            )
+return FileResponse(
+    path=str(final),
+    media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    filename=final.name,
+)
 
     except HTTPException:
         raise
