@@ -14,25 +14,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pptx import Presentation
 from pptx.text.text import _Run
 
-# -----------------------------------------------------------------------------
-# App setup
-# -----------------------------------------------------------------------------
-
-app = FastAPI(title="PCA Automation API", version="2.0.0")
+app = FastAPI(title="PCA Automation API", version="2.0.1")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pca-automation")
 
-# -----------------------------------------------------------------------------
-# Environment
-# -----------------------------------------------------------------------------
-
 DEFAULT_TEMPLATE_PATH = os.getenv("PPT_TEMPLATE_PATH", "template.pptx")
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "25"))
 
-# -----------------------------------------------------------------------------
-# Normalization helpers
-# -----------------------------------------------------------------------------
 
 def norm_text(value: Any) -> str:
     if value is None:
@@ -44,10 +33,12 @@ def norm_text(value: Any) -> str:
     s = re.sub(r"[^a-z0-9./:()\- ]+", "", s)
     return s.strip()
 
+
 def compact_key(value: Any) -> str:
     s = norm_text(value)
     s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
     return s
+
 
 def is_blank(value: Any) -> bool:
     if value is None:
@@ -55,6 +46,7 @@ def is_blank(value: Any) -> bool:
     if isinstance(value, float) and math.isnan(value):
         return True
     return str(value).strip() == ""
+
 
 def maybe_float(value: Any) -> Optional[float]:
     if value is None:
@@ -73,20 +65,30 @@ def maybe_float(value: Any) -> Optional[float]:
     except Exception:
         return None
 
+
 def fmt_percent(value: Optional[float], decimals: int = 2) -> Optional[str]:
     if value is None:
         return None
+    if math.isnan(value) or math.isinf(value):
+        return None
     return f"{value:.{decimals}f}%"
+
 
 def fmt_int(value: Optional[float]) -> Optional[str]:
     if value is None:
         return None
+    if math.isnan(value) or math.isinf(value):
+        return None
     return f"{int(round(value)):,}"
+
 
 def fmt_num(value: Optional[float], decimals: int = 2) -> Optional[str]:
     if value is None:
         return None
+    if math.isnan(value) or math.isinf(value):
+        return None
     return f"{value:,.{decimals}f}"
+
 
 def parse_date_any(value: Any) -> Optional[datetime]:
     if value is None or value == "":
@@ -96,43 +98,54 @@ def parse_date_any(value: Any) -> Optional[datetime]:
             return value
         if isinstance(value, pd.Timestamp):
             return value.to_pydatetime()
-        return pd.to_datetime(value, errors="coerce").to_pydatetime()
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.isna(parsed):
+            return None
+        return parsed.to_pydatetime()
     except Exception:
         return None
+
 
 def fmt_date_short(dt: Optional[datetime]) -> Optional[str]:
     if not dt:
         return None
-    return dt.strftime("%-d %b")
+    return f"{dt.day} {dt.strftime('%b')}"
+
 
 def fmt_date_full(dt: Optional[datetime]) -> Optional[str]:
     if not dt:
         return None
-    return dt.strftime("%-d %B %Y")
+    return f"{dt.day} {dt.strftime('%B %Y')}"
+
 
 def safe_jsonable(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: safe_jsonable(v) for k, v in obj.items()}
+
     if isinstance(obj, list):
         return [safe_jsonable(v) for v in obj]
+
     if isinstance(obj, tuple):
         return [safe_jsonable(v) for v in obj]
+
     if isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
         return obj
+
     if isinstance(obj, pd.Timestamp):
         return obj.isoformat()
+
     if isinstance(obj, datetime):
         return obj.isoformat()
+
+    if pd.isna(obj):
+        return None
+
     return obj
 
-# -----------------------------------------------------------------------------
-# Alias configuration
-# -----------------------------------------------------------------------------
 
 HEADER_ALIASES: Dict[str, List[str]] = {
-    # Entities / dimensions
     "campaign": [
         "campaign", "campaign name", "campaign title", "line item", "package", "placement"
     ],
@@ -148,8 +161,6 @@ HEADER_ALIASES: Dict[str, List[str]] = {
     "date": [
         "date", "day", "week", "month", "reporting date", "served date"
     ],
-
-    # Metrics
     "impressions": [
         "impressions", "imps", "delivered impressions", "served impressions"
     ],
@@ -242,9 +253,6 @@ PLACEHOLDER_RULES = {
     "TOP_FORMAT_1_NAME": "top_format_1_name",
 }
 
-# -----------------------------------------------------------------------------
-# Data classes
-# -----------------------------------------------------------------------------
 
 @dataclass
 class CandidateTable:
@@ -257,9 +265,6 @@ class CandidateTable:
     n_cols: int
     preview: List[Dict[str, Any]]
 
-# -----------------------------------------------------------------------------
-# Header matching
-# -----------------------------------------------------------------------------
 
 def alias_match_score(header: str, alias: str) -> int:
     h = norm_text(header)
@@ -274,12 +279,8 @@ def alias_match_score(header: str, alias: str) -> int:
         return 50
     return 0
 
+
 def canonicalize_headers(raw_headers: List[Any]) -> Tuple[Dict[str, int], Dict[str, str]]:
-    """
-    Returns:
-    - canonical_map: canonical_key -> column_index
-    - original_header_map: canonical_key -> original_header_text
-    """
     canonical_map: Dict[str, int] = {}
     original_header_map: Dict[str, str] = {}
 
@@ -303,12 +304,10 @@ def canonicalize_headers(raw_headers: List[Any]) -> Tuple[Dict[str, int], Dict[s
 
     return canonical_map, original_header_map
 
+
 def count_non_blank_cells(row_values: List[Any]) -> int:
     return sum(0 if is_blank(v) else 1 for v in row_values)
 
-# -----------------------------------------------------------------------------
-# Sheet parsing and candidate table detection
-# -----------------------------------------------------------------------------
 
 def trim_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -316,10 +315,8 @@ def trim_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(axis=1, how="all")
     return df
 
+
 def build_table_from_header(raw_df: pd.DataFrame, header_idx: int) -> pd.DataFrame:
-    """
-    Build a table from a header row downwards until 2 consecutive blank rows.
-    """
     if header_idx >= len(raw_df):
         return pd.DataFrame()
 
@@ -339,36 +336,28 @@ def build_table_from_header(raw_df: pd.DataFrame, header_idx: int) -> pd.DataFra
     table_df = pd.DataFrame(rows, columns=headers)
     return trim_dataframe(table_df)
 
+
 def score_table_type(canonical_headers: Dict[str, int], table_type: str) -> float:
     rules = TABLE_TYPE_RULES[table_type]
     score = 0.0
 
-    required_hits = 0
     for key in rules["required_any"]:
         if key in canonical_headers:
-            required_hits += 1
             score += 30
 
-    nice_hits = 0
     for key in rules["nice_to_have"]:
         if key in canonical_headers:
-            nice_hits += 1
             score += 10
 
-    # mild boost for breadth
     score += min(len(canonical_headers), 8) * 2
 
-    # stronger certainty if a dimension column is present for dimensional tables
-    if table_type in {"site", "geo", "format", "date"}:
-        if table_type in canonical_headers:
-            score += 20
+    if table_type in {"site", "geo", "format", "date"} and table_type in canonical_headers:
+        score += 20
 
-    # KPI tables often do not have a strong dimension
     if table_type == "kpi":
         metric_keys = {"ctr", "viewability", "engagement_rate", "vcr", "clicks", "impressions", "completes"}
         score += len(metric_keys.intersection(canonical_headers.keys())) * 4
 
-    # Delivery table usually contains plan vs delivery style columns
     if table_type == "delivery":
         if "planned_impressions" in canonical_headers and "delivered_impressions" in canonical_headers:
             score += 35
@@ -376,6 +365,7 @@ def score_table_type(canonical_headers: Dict[str, int], table_type: str) -> floa
             score += 10
 
     return score
+
 
 def find_candidate_tables(xls: pd.ExcelFile) -> List[CandidateTable]:
     candidates: List[CandidateTable] = []
@@ -404,12 +394,11 @@ def find_candidate_tables(xls: pd.ExcelFile) -> List[CandidateTable]:
             if table_df.empty or len(table_df) < 1:
                 continue
 
-            preview = table_df.head(3).fillna("").to_dict(orient="records")
+            preview = safe_jsonable(table_df.head(3).fillna("").to_dict(orient="records"))
 
             for table_type in TABLE_TYPE_RULES.keys():
                 score = score_table_type(canonical_headers, table_type)
 
-                # extra structural penalties / boosts
                 if len(table_df.columns) < 2:
                     score -= 20
                 if len(table_df) >= 3:
@@ -434,6 +423,7 @@ def find_candidate_tables(xls: pd.ExcelFile) -> List[CandidateTable]:
     candidates.sort(key=lambda c: c.score, reverse=True)
     return candidates
 
+
 def select_best_tables(candidates: List[CandidateTable], xls: pd.ExcelFile) -> Dict[str, Dict[str, Any]]:
     selected: Dict[str, Dict[str, Any]] = {}
 
@@ -453,9 +443,6 @@ def select_best_tables(candidates: List[CandidateTable], xls: pd.ExcelFile) -> D
 
     return selected
 
-# -----------------------------------------------------------------------------
-# Table standardization
-# -----------------------------------------------------------------------------
 
 def standardize_table(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -468,6 +455,7 @@ def standardize_table(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.rename(columns=rename_map)
     return df
+
 
 def coerce_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
     metric_cols = [
@@ -486,9 +474,6 @@ def coerce_metric_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-# -----------------------------------------------------------------------------
-# Metadata extraction beyond tables
-# -----------------------------------------------------------------------------
 
 LABEL_VALUE_ALIASES = {
     "campaign_name": ["campaign", "campaign name"],
@@ -496,13 +481,8 @@ LABEL_VALUE_ALIASES = {
     "end_date": ["end date", "campaign end", "live end"],
 }
 
+
 def extract_label_value_metadata(xls: pd.ExcelFile) -> Dict[str, Any]:
-    """
-    Scan all sheets for label/value pairs such as:
-    Campaign | Prada Spring
-    Start Date | 2026-01-01
-    End Date | 2026-01-31
-    """
     found: Dict[str, Any] = {}
 
     for sheet_name in xls.sheet_names:
@@ -534,9 +514,6 @@ def extract_label_value_metadata(xls: pd.ExcelFile) -> Dict[str, Any]:
 
     return found
 
-# -----------------------------------------------------------------------------
-# Mapping logic
-# -----------------------------------------------------------------------------
 
 def find_total_row(df: pd.DataFrame, label_columns: List[str]) -> Optional[pd.Series]:
     total_terms = {"total", "grand total", "overall", "all", "campaign total"}
@@ -549,31 +526,37 @@ def find_total_row(df: pd.DataFrame, label_columns: List[str]) -> Optional[pd.Se
                     return row
     return None
 
+
 def choose_metric_from_tables(
     selected_tables: Dict[str, Dict[str, Any]],
     metric_key: str
 ) -> Optional[float]:
-    # Priority 1 - KPI table
     if "kpi" in selected_tables:
         kpi_df = coerce_metric_columns(standardize_table(selected_tables["kpi"]["df"]))
         if metric_key in kpi_df.columns:
             series = kpi_df[metric_key].dropna()
             if not series.empty:
-                # use last non-null / summary style value
-                return float(series.iloc[-1])
+                value = float(series.iloc[-1])
+                if math.isnan(value) or math.isinf(value):
+                    return None
+                return value
 
-    # Priority 2 - Delivery table
     if "delivery" in selected_tables:
         del_df = coerce_metric_columns(standardize_table(selected_tables["delivery"]["df"]))
         if metric_key in del_df.columns:
             total_row = find_total_row(del_df, ["campaign", "site", "geo", "format"])
             if total_row is not None and pd.notna(total_row.get(metric_key)):
-                return float(total_row.get(metric_key))
+                value = float(total_row.get(metric_key))
+                if math.isnan(value) or math.isinf(value):
+                    return None
+                return value
             series = del_df[metric_key].dropna()
             if not series.empty:
-                return float(series.iloc[-1])
+                value = float(series.iloc[-1])
+                if math.isnan(value) or math.isinf(value):
+                    return None
+                return value
 
-    # Priority 3 - Dimensional tables, total row first, then weighted aggregation
     for table_type in ["site", "geo", "format", "date", "campaign"]:
         if table_type not in selected_tables:
             continue
@@ -584,16 +567,24 @@ def choose_metric_from_tables(
 
         total_row = find_total_row(df, ["campaign", "site", "geo", "format", "date"])
         if total_row is not None and pd.notna(total_row.get(metric_key)):
-            return float(total_row.get(metric_key))
+            value = float(total_row.get(metric_key))
+            if math.isnan(value) or math.isinf(value):
+                return None
+            return value
 
         series = df[metric_key].dropna()
         if not series.empty:
-            # for percentage metrics, median is often safer than sum or first-row
             if metric_key in {"ctr", "viewability", "engagement_rate", "vcr"}:
-                return float(series.median())
-            return float(series.sum())
+                value = float(series.median())
+            else:
+                value = float(series.sum())
+
+            if math.isnan(value) or math.isinf(value):
+                return None
+            return value
 
     return None
+
 
 def choose_campaign_name(meta: Dict[str, Any], selected_tables: Dict[str, Dict[str, Any]]) -> Optional[str]:
     if meta.get("campaign_name"):
@@ -610,6 +601,7 @@ def choose_campaign_name(meta: Dict[str, Any], selected_tables: Dict[str, Dict[s
                 return vals[0]
     return None
 
+
 def choose_live_dates(meta: Dict[str, Any], selected_tables: Dict[str, Dict[str, Any]]) -> Tuple[Optional[datetime], Optional[datetime]]:
     start_date = meta.get("start_date")
     end_date = meta.get("end_date")
@@ -617,7 +609,6 @@ def choose_live_dates(meta: Dict[str, Any], selected_tables: Dict[str, Dict[str,
     if start_date and end_date:
         return start_date, end_date
 
-    # Campaign table direct columns
     if "campaign" in selected_tables:
         df = coerce_metric_columns(standardize_table(selected_tables["campaign"]["df"]))
         if not start_date and "start_date" in df.columns:
@@ -629,7 +620,6 @@ def choose_live_dates(meta: Dict[str, Any], selected_tables: Dict[str, Dict[str,
             if vals:
                 end_date = max(vals)
 
-    # Date table min / max
     if "date" in selected_tables:
         df = coerce_metric_columns(standardize_table(selected_tables["date"]["df"]))
         if "date" in df.columns:
@@ -641,6 +631,7 @@ def choose_live_dates(meta: Dict[str, Any], selected_tables: Dict[str, Dict[str,
                     end_date = max(vals)
 
     return start_date, end_date
+
 
 def extract_top_rows(
     selected_tables: Dict[str, Dict[str, Any]],
@@ -666,7 +657,37 @@ def extract_top_rows(
         return []
 
     work = work.sort_values(sort_metric, ascending=False).head(top_n)
-    return work.to_dict(orient="records")
+    return safe_jsonable(work.to_dict(orient="records"))
+
+
+def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    required_core = [
+        "campaign_name",
+        "live_dates_short",
+        "performance_ctr",
+        "performance_viewability",
+        "performance_engagement_rate",
+        "performance_vcr",
+    ]
+
+    missing_required = [k for k in required_core if not mapped.get(k)]
+
+    warnings = []
+    if not mapped.get("planned_impressions") and not mapped.get("delivered_impressions"):
+        warnings.append("No delivery totals found")
+    if not mapped.get("top_site_1_name"):
+        warnings.append("No top site ranking found")
+    if not mapped.get("top_geo_1_name"):
+        warnings.append("No geo ranking found")
+    if not mapped.get("top_format_1_name"):
+        warnings.append("No format ranking found")
+
+    return {
+        "is_valid": len(missing_required) == 0,
+        "missing_required": missing_required,
+        "warnings": warnings,
+    }
+
 
 def build_mapped_values(xls: pd.ExcelFile) -> Dict[str, Any]:
     candidates = find_candidate_tables(xls)
@@ -708,12 +729,12 @@ def build_mapped_values(xls: pd.ExcelFile) -> Dict[str, Any]:
         "delivered_impressions": fmt_int(delivered_impressions),
         "total_impressions": fmt_int(total_impressions),
         "ad_value": fmt_num(ad_value, 2),
-        "top_site_1_name": top_sites[0]["site"] if len(top_sites) > 0 else None,
-        "top_site_1_ctr": fmt_percent(top_sites[0]["ctr"], 2) if len(top_sites) > 0 else None,
-        "top_site_2_name": top_sites[1]["site"] if len(top_sites) > 1 else None,
-        "top_site_2_ctr": fmt_percent(top_sites[1]["ctr"], 2) if len(top_sites) > 1 else None,
-        "top_geo_1_name": top_geos[0]["geo"] if len(top_geos) > 0 else None,
-        "top_format_1_name": top_formats[0]["format"] if len(top_formats) > 0 else None,
+        "top_site_1_name": top_sites[0]["site"] if len(top_sites) > 0 and "site" in top_sites[0] else None,
+        "top_site_1_ctr": fmt_percent(top_sites[0]["ctr"], 2) if len(top_sites) > 0 and "ctr" in top_sites[0] else None,
+        "top_site_2_name": top_sites[1]["site"] if len(top_sites) > 1 and "site" in top_sites[1] else None,
+        "top_site_2_ctr": fmt_percent(top_sites[1]["ctr"], 2) if len(top_sites) > 1 and "ctr" in top_sites[1] else None,
+        "top_geo_1_name": top_geos[0]["geo"] if len(top_geos) > 0 and "geo" in top_geos[0] else None,
+        "top_format_1_name": top_formats[0]["format"] if len(top_formats) > 0 and "format" in top_formats[0] else None,
     }
 
     diagnostics = {
@@ -726,8 +747,8 @@ def build_mapped_values(xls: pd.ExcelFile) -> Dict[str, Any]:
         "selected_tables": {
             t: {
                 "candidate": asdict(v["candidate"]),
-                "columns": list(v["df"].columns),
-                "preview": v["df"].head(5).fillna("").to_dict(orient="records"),
+                "columns": [str(col) for col in list(v["df"].columns)],
+                "preview": safe_jsonable(v["df"].head(5).fillna("").to_dict(orient="records")),
             }
             for t, v in selected_tables.items()
         },
@@ -735,49 +756,17 @@ def build_mapped_values(xls: pd.ExcelFile) -> Dict[str, Any]:
 
     validation = validate_mapped_values(mapped)
 
-    return {
+    result = {
         "mapped_values": mapped,
         "validation": validation,
-        "diagnostics": safe_jsonable(diagnostics),
+        "diagnostics": diagnostics,
     }
 
-# -----------------------------------------------------------------------------
-# Validation
-# -----------------------------------------------------------------------------
+    return safe_jsonable(result)
 
-def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
-    required_core = [
-        "campaign_name",
-        "live_dates_short",
-        "performance_ctr",
-        "performance_viewability",
-        "performance_engagement_rate",
-        "performance_vcr",
-    ]
-
-    missing_required = [k for k in required_core if not mapped.get(k)]
-
-    warnings = []
-    if not mapped.get("planned_impressions") and not mapped.get("delivered_impressions"):
-        warnings.append("No delivery totals found")
-    if not mapped.get("top_site_1_name"):
-        warnings.append("No top site ranking found")
-    if not mapped.get("top_geo_1_name"):
-        warnings.append("No geo ranking found")
-    if not mapped.get("top_format_1_name"):
-        warnings.append("No format ranking found")
-
-    return {
-        "is_valid": len(missing_required) == 0,
-        "missing_required": missing_required,
-        "warnings": warnings,
-    }
-
-# -----------------------------------------------------------------------------
-# PPT replacement
-# -----------------------------------------------------------------------------
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([^}]+)\}\}")
+
 
 def replace_text_in_run(run: _Run, replacements: Dict[str, str]) -> None:
     text = run.text
@@ -785,28 +774,28 @@ def replace_text_in_run(run: _Run, replacements: Dict[str, str]) -> None:
         text = text.replace(f"{{{{{placeholder}}}}}", value)
     run.text = text
 
+
 def replace_text_in_text_frame(text_frame, replacements: Dict[str, str]) -> None:
     for paragraph in text_frame.paragraphs:
         for run in paragraph.runs:
             replace_text_in_run(run, replacements)
 
-        # If placeholder is split across runs, rebuild paragraph text as fallback
         combined = "".join(run.text for run in paragraph.runs)
         new_text = combined
         for placeholder, value in replacements.items():
             new_text = new_text.replace(f"{{{{{placeholder}}}}}", value)
 
-        if new_text != combined:
-            if paragraph.runs:
-                paragraph.runs[0].text = new_text
-                for run in paragraph.runs[1:]:
-                    run.text = ""
+        if new_text != combined and paragraph.runs:
+            paragraph.runs[0].text = new_text
+            for run in paragraph.runs[1:]:
+                run.text = ""
+
 
 def replace_in_shape(shape, replacements: Dict[str, str]) -> None:
     if hasattr(shape, "text_frame") and shape.has_text_frame:
         replace_text_in_text_frame(shape.text_frame, replacements)
 
-    if shape.shape_type == 6:  # group
+    if shape.shape_type == 6:
         for subshape in shape.shapes:
             replace_in_shape(subshape, replacements)
 
@@ -814,6 +803,7 @@ def replace_in_shape(shape, replacements: Dict[str, str]) -> None:
         for row in shape.table.rows:
             for cell in row.cells:
                 replace_text_in_text_frame(cell.text_frame, replacements)
+
 
 def fill_ppt_template(template_bytes: bytes, mapped_values: Dict[str, Any]) -> bytes:
     prs = Presentation(io.BytesIO(template_bytes))
@@ -832,9 +822,6 @@ def fill_ppt_template(template_bytes: bytes, mapped_values: Dict[str, Any]) -> b
     out.seek(0)
     return out.read()
 
-# -----------------------------------------------------------------------------
-# File safety
-# -----------------------------------------------------------------------------
 
 async def read_upload_bytes(file: UploadFile) -> bytes:
     content = await file.read()
@@ -843,31 +830,38 @@ async def read_upload_bytes(file: UploadFile) -> bytes:
         raise HTTPException(status_code=400, detail=f"File too large. Max {MAX_FILE_SIZE_MB}MB")
     return content
 
+
 def open_excel_from_bytes(content: bytes) -> pd.ExcelFile:
     try:
         return pd.ExcelFile(io.BytesIO(content), engine="openpyxl")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid Excel file: {e}")
 
-# -----------------------------------------------------------------------------
-# Routes
-# -----------------------------------------------------------------------------
 
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
 
+
 @app.post("/validate-eoc")
 async def validate_eoc(file: UploadFile = File(...)) -> JSONResponse:
-    if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        raise HTTPException(status_code=400, detail="Please upload an Excel file")
+    try:
+        if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            raise HTTPException(status_code=400, detail="Please upload an Excel file")
 
-    content = await read_upload_bytes(file)
-    xls = open_excel_from_bytes(content)
-    result = build_mapped_values(xls)
+        content = await read_upload_bytes(file)
+        xls = open_excel_from_bytes(content)
+        result = build_mapped_values(xls)
 
-   clean_result = safe_jsonable(result)
-return JSONResponse(content=clean_result)
+        clean_result = safe_jsonable(result)
+        return JSONResponse(content=clean_result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("validate_eoc failed")
+        raise HTTPException(status_code=500, detail=f"validate_eoc failed: {str(e)}")
+
 
 @app.post("/generate-ppt")
 async def generate_ppt(
@@ -875,45 +869,53 @@ async def generate_ppt(
     use_server_template: bool = Form(True),
     template_file: Optional[UploadFile] = File(None),
 ) -> StreamingResponse:
-    if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        raise HTTPException(status_code=400, detail="Please upload an Excel file")
+    try:
+        if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            raise HTTPException(status_code=400, detail="Please upload an Excel file")
 
-    eoc_content = await read_upload_bytes(file)
-    xls = open_excel_from_bytes(eoc_content)
-    result = build_mapped_values(xls)
+        eoc_content = await read_upload_bytes(file)
+        xls = open_excel_from_bytes(eoc_content)
+        result = build_mapped_values(xls)
 
-    if not result["validation"]["is_valid"]:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "Validation failed before PPT generation",
-                "validation": result["validation"],
-                "mapped_values": result["mapped_values"],
+        if not result["validation"]["is_valid"]:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Validation failed before PPT generation",
+                    "validation": result["validation"],
+                    "mapped_values": result["mapped_values"],
+                },
+            )
+
+        if use_server_template:
+            if not os.path.exists(DEFAULT_TEMPLATE_PATH):
+                raise HTTPException(status_code=500, detail=f"Template not found at {DEFAULT_TEMPLATE_PATH}")
+            with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
+                template_bytes = f.read()
+        else:
+            if template_file is None:
+                raise HTTPException(status_code=400, detail="No template file uploaded")
+            if not template_file.filename.lower().endswith(".pptx"):
+                raise HTTPException(status_code=400, detail="Template must be a .pptx file")
+            template_bytes = await read_upload_bytes(template_file)
+
+        ppt_bytes = fill_ppt_template(template_bytes, result["mapped_values"])
+
+        return StreamingResponse(
+            io.BytesIO(ppt_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={
+                "Content-Disposition": 'attachment; filename="exec_summary_output.pptx"',
+                "X-Mapped-Values": json.dumps(safe_jsonable(result["mapped_values"])),
             },
         )
 
-    if use_server_template:
-        if not os.path.exists(DEFAULT_TEMPLATE_PATH):
-            raise HTTPException(status_code=500, detail=f"Template not found at {DEFAULT_TEMPLATE_PATH}")
-        with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
-            template_bytes = f.read()
-    else:
-        if template_file is None:
-            raise HTTPException(status_code=400, detail="No template file uploaded")
-        if not template_file.filename.lower().endswith(".pptx"):
-            raise HTTPException(status_code=400, detail="Template must be a .pptx file")
-        template_bytes = await read_upload_bytes(template_file)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("generate_ppt failed")
+        raise HTTPException(status_code=500, detail=f"generate_ppt failed: {str(e)}")
 
-    ppt_bytes = fill_ppt_template(template_bytes, result["mapped_values"])
-
-    return StreamingResponse(
-        io.BytesIO(ppt_bytes),
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        headers={
-            "Content-Disposition": 'attachment; filename="exec_summary_output.pptx"',
-            "X-Mapped-Values": json.dumps(result["mapped_values"]),
-        },
-    )
 
 @app.post("/process")
 async def process_eoc(
@@ -922,60 +924,57 @@ async def process_eoc(
     use_server_template: bool = Form(True),
     template_file: Optional[UploadFile] = File(None),
 ) -> Any:
-    """
-    Combined endpoint:
-    - returns JSON validation/mapped values
-    - optionally also returns PPT if generate_ppt_output=true
+    try:
+        if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            raise HTTPException(status_code=400, detail="Please upload an Excel file")
 
-    For clean API usage, keep /validate-eoc and /generate-ppt separate.
-    This exists for convenience.
-    """
-    if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        raise HTTPException(status_code=400, detail="Please upload an Excel file")
+        eoc_content = await read_upload_bytes(file)
+        xls = open_excel_from_bytes(eoc_content)
+        result = build_mapped_values(xls)
 
-    eoc_content = await read_upload_bytes(file)
-    xls = open_excel_from_bytes(eoc_content)
-    result = build_mapped_values(xls)
+        if not generate_ppt_output:
+            clean_result = safe_jsonable(result)
+            return JSONResponse(content=clean_result)
 
-    if not generate_ppt_output:
-        return JSONResponse(content=safe_jsonable(result))
+        if not result["validation"]["is_valid"]:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Validation failed before PPT generation",
+                    "validation": result["validation"],
+                    "mapped_values": result["mapped_values"],
+                },
+            )
 
-    if not result["validation"]["is_valid"]:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "Validation failed before PPT generation",
-                "validation": result["validation"],
-                "mapped_values": result["mapped_values"],
+        if use_server_template:
+            if not os.path.exists(DEFAULT_TEMPLATE_PATH):
+                raise HTTPException(status_code=500, detail=f"Template not found at {DEFAULT_TEMPLATE_PATH}")
+            with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
+                template_bytes = f.read()
+        else:
+            if template_file is None:
+                raise HTTPException(status_code=400, detail="No template file uploaded")
+            if not template_file.filename.lower().endswith(".pptx"):
+                raise HTTPException(status_code=400, detail="Template must be a .pptx file")
+            template_bytes = await read_upload_bytes(template_file)
+
+        ppt_bytes = fill_ppt_template(template_bytes, result["mapped_values"])
+
+        return StreamingResponse(
+            io.BytesIO(ppt_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={
+                "Content-Disposition": 'attachment; filename="exec_summary_output.pptx"',
+                "X-Mapped-Values": json.dumps(safe_jsonable(result["mapped_values"])),
             },
         )
 
-    if use_server_template:
-        if not os.path.exists(DEFAULT_TEMPLATE_PATH):
-            raise HTTPException(status_code=500, detail=f"Template not found at {DEFAULT_TEMPLATE_PATH}")
-        with open(DEFAULT_TEMPLATE_PATH, "rb") as f:
-            template_bytes = f.read()
-    else:
-        if template_file is None:
-            raise HTTPException(status_code=400, detail="No template file uploaded")
-        if not template_file.filename.lower().endswith(".pptx"):
-            raise HTTPException(status_code=400, detail="Template must be a .pptx file")
-        template_bytes = await read_upload_bytes(template_file)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("process_eoc failed")
+        raise HTTPException(status_code=500, detail=f"process_eoc failed: {str(e)}")
 
-    ppt_bytes = fill_ppt_template(template_bytes, result["mapped_values"])
-
-    return StreamingResponse(
-        io.BytesIO(ppt_bytes),
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        headers={
-            "Content-Disposition": 'attachment; filename="exec_summary_output.pptx"',
-            "X-Mapped-Values": json.dumps(result["mapped_values"]),
-        },
-    )
-
-# -----------------------------------------------------------------------------
-# Local dev entrypoint
-# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
