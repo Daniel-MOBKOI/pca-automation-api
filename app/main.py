@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 import tempfile
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,7 +13,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pptx import Presentation
 
-app = FastAPI(title="PCA Automation API", version="5.0.0")
+app = FastAPI(title="PCA Automation API", version="6.0.0")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = BASE_DIR / "outputs"
@@ -122,15 +123,15 @@ def find_column(hmap: Dict[str, int], token_groups: List[List[str]]) -> Optional
 
 
 # -------------------------
-# Token rules
+# Tokens
 # -------------------------
 KPI_TOKENS = {
     "impressions": [["impressions"]],
     "ctr": [["ctr"], ["click", "through"]],
-    "engagement_rate": [["engagement", "rate"], ["engagement", "%"], ["er"], ["total", "er"], ["overall", "er"]],
-    "vcr": [["video", "completion", "rate"], ["vcr"], ["completed", "view", "rate"], ["completion"]],
-    "on_screen": [["mobkoi", "on", "screen"], ["on", "screen"], ["viewability"], ["viewable", "rate"]],
-    "spend": [["actual", "spend"], ["spend"], ["total", "spend"], ["budget"]],
+    "engagement_rate": [["engagement", "rate"], ["engagement", "%"], ["er"]],
+    "vcr": [["video", "completion", "rate"], ["vcr"], ["completion"]],
+    "on_screen": [["mobkoi", "on", "screen"], ["on", "screen"], ["viewability"]],
+    "spend": [["actual", "spend"], ["spend"], ["budget"]],
 }
 
 DELIVERY_TOKENS = {
@@ -148,19 +149,17 @@ SITE_TOKENS = {
 
 
 def score_kpi_table(hmap: Dict[str, int]) -> int:
-    score = 0
-    for key in ["impressions", "ctr", "engagement_rate", "vcr", "on_screen", "spend"]:
-        if find_column(hmap, KPI_TOKENS[key]) is not None:
-            score += 1
-    return score
+    return sum(
+        1 for key in ["impressions", "ctr", "engagement_rate", "vcr", "on_screen", "spend"]
+        if find_column(hmap, KPI_TOKENS[key]) is not None
+    )
 
 
 def score_delivery_table(hmap: Dict[str, int]) -> int:
-    score = 0
-    for key in ["io_overall_impressions", "delivered_overall_av_units", "delivery_with_av_percent", "added_value_worth"]:
-        if find_column(hmap, DELIVERY_TOKENS[key]) is not None:
-            score += 1
-    return score
+    return sum(
+        1 for key in ["io_overall_impressions", "delivered_overall_av_units", "delivery_with_av_percent", "added_value_worth"]
+        if find_column(hmap, DELIVERY_TOKENS[key]) is not None
+    )
 
 
 # -------------------------
@@ -265,11 +264,29 @@ def validate_export_ready(mapped: Dict[str, str]) -> Tuple[bool, List[str]]:
 
 
 # -------------------------
+# Safe getters
+# -------------------------
+def safe_value(ws, row: int, col: Optional[int]) -> Any:
+    if not row or not col or row < 1 or col < 1:
+        return None
+    return ws.cell(row, col).value
+
+
+def unique_join(values: List[str]) -> str:
+    out = []
+    for v in values:
+        if v and v not in out:
+            out.append(v)
+    return ", ".join(out) if out else "N/A"
+
+
+# -------------------------
 # Core mapping engine
 # -------------------------
 def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]:
     wb = openpyxl.load_workbook(eoc_path, data_only=True)
-    ws = wb["Consolidated Report"] if "Consolidated Report" in wb.sheetnames else wb.active
+    preferred_sheet = "Consolidated Report"
+    ws = wb[preferred_sheet] if preferred_sheet in wb.sheetnames else wb[wb.sheetnames[0]]
 
     labels = row_labels(ws)
     campaign_rows = labels.get("campaign", [])
@@ -279,6 +296,7 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[st
     date_rows = labels.get("date", [])
 
     logs: Dict[str, Any] = {
+        "sheet_used": ws.title,
         "campaign_rows": campaign_rows,
         "geo_rows": geo_rows,
         "format_rows": format_rows,
@@ -288,9 +306,12 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[st
         "rules_sheets": rules_config.get("sheets", []),
     }
 
+    if not campaign_rows:
+        raise ValueError("No Campaign table found in EOC report")
+
     mapped: Dict[str, str] = {}
 
-    # Detect KPI and delivery tables
+    # Detect KPI / Delivery tables
     kpi_header = None
     delivery_header = None
     best_kpi_score = -1
@@ -309,7 +330,6 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[st
             best_delivery_score = delivery_score
             delivery_header = row
 
-    # Split if same table selected but multiple campaign tables exist
     if kpi_header == delivery_header and len(campaign_rows) > 1:
         for row in campaign_rows:
             if row != kpi_header and score_delivery_table(header_map(ws, row)) > 0:
@@ -325,15 +345,16 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[st
         hmap = header_map(ws, kpi_header)
         data_row = kpi_header + 1
 
-        campaign_name_raw = ws.cell(data_row, 2).value
+        campaign_name_raw = safe_value(ws, data_row, 2)
         mapped["{{CAMPAIGN_NAME}}"] = str(campaign_name_raw or "N/A")
-        mapped["{{DELIVERED_IMPRESSIONS}}"] = fmt_int(ws.cell(data_row, find_column(hmap, KPI_TOKENS["impressions"]) or 0).value)
-        mapped["{{PERFORMANCE_CTR}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["ctr"]) or 0).value, 2)
-        mapped["{{PERFORMANCE_ENGAGEMENT_RATE}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["engagement_rate"]) or 0).value, 2)
-        mapped["{{PERFORMANCE_VCR}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["vcr"]) or 0).value, 1)
-        mapped["{{PERFORMANCE_ON_SCREEN}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["on_screen"]) or 0).value, 1)
-        mapped["{{CAMPAIGN_BUDGET}}"] = fmt_cur(ws.cell(data_row, find_column(hmap, KPI_TOKENS["spend"]) or 0).value)
+        mapped["{{DELIVERED_IMPRESSIONS}}"] = fmt_int(safe_value(ws, data_row, find_column(hmap, KPI_TOKENS["impressions"])))
+        mapped["{{PERFORMANCE_CTR}}"] = fmt_pct(safe_value(ws, data_row, find_column(hmap, KPI_TOKENS["ctr"])), 2)
+        mapped["{{PERFORMANCE_ENGAGEMENT_RATE}}"] = fmt_pct(safe_value(ws, data_row, find_column(hmap, KPI_TOKENS["engagement_rate"])), 2)
+        mapped["{{PERFORMANCE_VCR}}"] = fmt_pct(safe_value(ws, data_row, find_column(hmap, KPI_TOKENS["vcr"])), 1)
+        mapped["{{PERFORMANCE_ON_SCREEN}}"] = fmt_pct(safe_value(ws, data_row, find_column(hmap, KPI_TOKENS["on_screen"])), 1)
+        mapped["{{CAMPAIGN_BUDGET}}"] = fmt_cur(safe_value(ws, data_row, find_column(hmap, KPI_TOKENS["spend"])))
     else:
+        logs["warnings"].append("No KPI table found")
         for key in [
             "{{CAMPAIGN_NAME}}",
             "{{DELIVERED_IMPRESSIONS}}",
@@ -344,17 +365,16 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[st
             "{{CAMPAIGN_BUDGET}}",
         ]:
             mapped[key] = "N/A"
-        logs["warnings"].append("No KPI table found")
 
     # Delivery extraction
     if delivery_header:
         hmap = header_map(ws, delivery_header)
         data_row = delivery_header + 1
 
-        io_val = ws.cell(data_row, find_column(hmap, DELIVERY_TOKENS["io_overall_impressions"]) or 0).value
-        av_val = ws.cell(data_row, find_column(hmap, DELIVERY_TOKENS["delivered_overall_av_units"]) or 0).value
-        pct_val = ws.cell(data_row, find_column(hmap, DELIVERY_TOKENS["delivery_with_av_percent"]) or 0).value
-        worth_val = ws.cell(data_row, find_column(hmap, DELIVERY_TOKENS["added_value_worth"]) or 0).value
+        io_val = safe_value(ws, data_row, find_column(hmap, DELIVERY_TOKENS["io_overall_impressions"]))
+        av_val = safe_value(ws, data_row, find_column(hmap, DELIVERY_TOKENS["delivered_overall_av_units"]))
+        pct_val = safe_value(ws, data_row, find_column(hmap, DELIVERY_TOKENS["delivery_with_av_percent"]))
+        worth_val = safe_value(ws, data_row, find_column(hmap, DELIVERY_TOKENS["added_value_worth"]))
 
         mapped["{{IO_OVERALL_IMPRESSIONS}}"] = fmt_int(io_val)
         mapped["{{DELIVERED_OVERALL_AV_UNITS}}"] = fmt_int(av_val, absolute=True)
@@ -393,10 +413,8 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[st
         for r in collect_rows(ws, format_rows[0] + 1):
             val = ws.cell(r, 2).value
             if val not in (None, ""):
-                sval = str(val).strip()
-                if sval not in values:
-                    values.append(sval)
-        mapped["{{CAMPAIGN_FORMATS}}"] = ", ".join(values) if values else "N/A"
+                values.append(str(val).strip())
+        mapped["{{CAMPAIGN_FORMATS}}"] = unique_join(values)
     else:
         mapped["{{CAMPAIGN_FORMATS}}"] = "N/A"
 
@@ -406,10 +424,8 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[st
         for r in collect_rows(ws, geo_rows[0] + 1):
             val = ws.cell(r, 2).value
             if val not in (None, ""):
-                sval = str(val).strip()
-                if sval not in values:
-                    values.append(sval)
-        mapped["{{CAMPAIGN_MARKETS}}"] = ", ".join(values) if values else "N/A"
+                values.append(str(val).strip())
+        mapped["{{CAMPAIGN_MARKETS}}"] = unique_join(values)
     else:
         mapped["{{CAMPAIGN_MARKETS}}"] = "N/A"
 
@@ -438,11 +454,14 @@ def map_eoc(eoc_path: Path, template_path: Optional[Path], rules_config: Dict[st
         rows = collect_rows(ws, site_header + 1)
         entries = []
         for r in rows:
+            name = ws.cell(r, 2).value
+            if name in (None, ""):
+                continue
             entries.append({
-                "name": str(ws.cell(r, 2).value),
-                "ctr": ws.cell(r, ctr_col).value if ctr_col else None,
-                "er": ws.cell(r, er_col).value if er_col else None,
-                "vcr": ws.cell(r, vcr_col).value if vcr_col else None,
+                "name": str(name),
+                "ctr": safe_value(ws, r, ctr_col),
+                "er": safe_value(ws, r, er_col),
+                "vcr": safe_value(ws, r, vcr_col),
             })
 
         for prefix, metric, decimals in [("CTR", "ctr", 2), ("ER", "er", 2), ("VCR", "vcr", 1)]:
@@ -518,326 +537,88 @@ def health():
 
 @app.post("/validate-eoc")
 async def validate_eoc(eoc_file: UploadFile = File(...)):
-    if not RULES_WORKBOOK.exists():
-        raise HTTPException(status_code=500, detail="Rules workbook not found in assets/")
+    try:
+        if not RULES_WORKBOOK.exists():
+            raise HTTPException(status_code=500, detail="Rules workbook not found in assets/")
+        if not DEFAULT_TEMPLATE.exists():
+            raise HTTPException(status_code=500, detail="Default template not found in assets/")
 
-    template_path = DEFAULT_TEMPLATE
+        template_path = DEFAULT_TEMPLATE
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            eoc_path = tmp / eoc_file.filename
 
-        eoc_path = tmp / eoc_file.filename
-        with eoc_path.open("wb") as f:
-            shutil.copyfileobj(eoc_file.file, f)
+            with eoc_path.open("wb") as f:
+                shutil.copyfileobj(eoc_file.file, f)
 
-        rules_config = load_rules_config(RULES_WORKBOOK)
-        mapped, logs = map_eoc(eoc_path, template_path, rules_config)
-        return JSONResponse(content={"mapped_values": mapped, "logs": logs})
+            rules_config = load_rules_config(RULES_WORKBOOK)
+            mapped, logs = map_eoc(eoc_path, template_path, rules_config)
+            return JSONResponse(content={"mapped_values": mapped, "logs": logs})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+            },
+        )
 
 
 @app.post("/generate-exec-summary")
 async def generate_exec_summary(eoc_file: UploadFile = File(...)):
-    if not RULES_WORKBOOK.exists():
-        raise HTTPException(status_code=500, detail="Rules workbook not found in assets/")
+    try:
+        if not RULES_WORKBOOK.exists():
+            raise HTTPException(status_code=500, detail="Rules workbook not found in assets/")
+        if not DEFAULT_TEMPLATE.exists():
+            raise HTTPException(status_code=500, detail="Default template not found in assets/")
 
-    template_path = DEFAULT_TEMPLATE
+        template_path = DEFAULT_TEMPLATE
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            eoc_path = tmp / eoc_file.filename
 
-        eoc_path = tmp / eoc_file.filename
-        with eoc_path.open("wb") as f:
-            shutil.copyfileobj(eoc_file.file, f)
+            with eoc_path.open("wb") as f:
+                shutil.copyfileobj(eoc_file.file, f)
 
-        rules_config = load_rules_config(RULES_WORKBOOK)
-        mapped, logs = map_eoc(eoc_path, template_path, rules_config)
+            rules_config = load_rules_config(RULES_WORKBOOK)
+            mapped, logs = map_eoc(eoc_path, template_path, rules_config)
 
-        ok, missing = validate_export_ready(mapped)
-        if not ok:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": "Unable to complete - please check file structure.",
-                    "missing": missing,
-                    "mapped_values": mapped,
-                    "logs": logs,
-                },
+            ok, missing = validate_export_ready(mapped)
+            if not ok:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": "Unable to complete - please check file structure.",
+                        "missing": missing,
+                        "mapped_values": mapped,
+                        "logs": logs,
+                    },
+                )
+
+            out_path = tmp / "output.pptx"
+            replace_placeholders(template_path, out_path, mapped)
+
+            final = OUTPUT_DIR / "Exec_Summary_Output.pptx"
+            shutil.copy2(out_path, final)
+
+            return FileResponse(
+                path=str(final),
+                media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                filename="Exec_Summary_Output.pptx",
             )
 
-        out_path = tmp / "output.pptx"
-        replace_placeholders(template_path, out_path, mapped)
-
-        final = OUTPUT_DIR / "Exec_Summary_Output.pptx"
-        shutil.copy2(out_path, final)
-
-        return FileResponse(
-            path=str(final),
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            filename="Exec_Summary_Output.pptx",
-        )    # core required placeholders
-    config["required_placeholders"] = {
-        "{{CAMPAIGN_NAME}}",
-        "{{CAMPAIGN_PERIOD}}",
-        "{{DELIVERED_IMPRESSIONS}}",
-        "{{PERFORMANCE_CTR}}",
-        "{{PERFORMANCE_ENGAGEMENT_RATE}}",
-        "{{PERFORMANCE_VCR}}",
-        "{{PERFORMANCE_ON_SCREEN}}",
-    }
-
-    return config
-
-
-# -------------------------
-# Helpers
-# -------------------------
-def row_labels(ws):
-    labels = {}
-    for r in range(1, ws.max_row + 1):
-        val = norm(ws.cell(r, 2).value)
-        if val:
-            labels.setdefault(val, []).append(r)
-    return labels
-
-
-def collect_rows(ws, start_row):
-    rows = []
-    r = start_row
-    while r <= ws.max_row and ws.cell(r, 2).value not in (None, ""):
-        rows.append(r)
-        r += 1
-    return rows
-
-
-def header_map(ws, row):
-    out = {}
-    for c in range(2, ws.max_column + 1):
-        val = ws.cell(row, c).value
-        if val not in (None, ""):
-            out[norm(val)] = c
-    return out
-
-
-def find_column(hmap, token_groups):
-    for tokens in token_groups:
-        for header, col in hmap.items():
-            if all(token in header for token in tokens):
-                return col
-    return None
-
-
-# -------------------------
-# Tokens
-# -------------------------
-KPI_TOKENS = {
-    "impressions": [["impressions"]],
-    "ctr": [["ctr"]],
-    "engagement_rate": [["engagement", "rate"], ["er"]],
-    "vcr": [["vcr"], ["completion"]],
-    "on_screen": [["on", "screen"], ["viewability"]],
-    "spend": [["spend"], ["budget"]],
-}
-
-DELIVERY_TOKENS = {
-    "io": [["sold"]],
-    "av": [["av"]],
-    "pct": [["delivery"]],
-    "worth": [["amount"]],
-}
-
-
-# -------------------------
-# Business logic
-# -------------------------
-def detect_brand(filename, campaign_name=None):
-    if " - " in filename:
-        return filename.split(" - ")[0]
-    if campaign_name:
-        return str(campaign_name).split()[0]
-    return "N/A"
-
-
-def detect_dates(ws, date_row):
-    if not date_row:
-        return None, None
-
-    dates = []
-    for r in collect_rows(ws, date_row + 1):
-        val = ws.cell(r, 2).value
-        if isinstance(val, datetime):
-            dates.append(val)
-
-    if not dates:
-        return None, None
-
-    return min(dates), max(dates)
-
-
-def fallback_dates(filename):
-    match = re.search(r"(\d{2})\.(\d{2})\.(\d{4})", filename)
-    if not match:
-        return None, None
-
-    end = datetime(int(match.group(3)), int(match.group(2)), int(match.group(1))) - timedelta(days=1)
-    start = end - timedelta(days=6)
-    return start, end
-
-
-# -------------------------
-# Normalisation
-# -------------------------
-def normalize_mapped_values(mapped):
-    out = dict(mapped)
-
-    if "{{CAMPAIGN_BUDGET}}" in out:
-        out["{{ACTUAL_SPEND}}"] = out["{{CAMPAIGN_BUDGET}}"]
-        out["{{SPEND}}"] = out["{{CAMPAIGN_BUDGET}}"]
-
-    if "{{DELIVERED_OVERALL_AV_UNITS}}" in out:
-        out["{{ADDED_VALUE_IMPRESSIONS}}"] = out["{{DELIVERED_OVERALL_AV_UNITS}}"]
-
-    for k, v in list(out.items()):
-        if v is None or v == "":
-            out[k] = "N/A"
-
-    return out
-
-
-# -------------------------
-# Validation
-# -------------------------
-def validate_export_ready(mapped):
-    required = [
-        "{{CAMPAIGN_NAME}}",
-        "{{CAMPAIGN_PERIOD}}",
-        "{{DELIVERED_IMPRESSIONS}}",
-        "{{PERFORMANCE_CTR}}",
-        "{{PERFORMANCE_ENGAGEMENT_RATE}}",
-        "{{PERFORMANCE_VCR}}",
-        "{{PERFORMANCE_ON_SCREEN}}",
-    ]
-
-    missing = [k for k in required if mapped.get(k) == "N/A"]
-    return len(missing) == 0, missing
-
-
-# -------------------------
-# Mapping
-# -------------------------
-def map_eoc(eoc_path, template_path, rules_config):
-    wb = openpyxl.load_workbook(eoc_path, data_only=True)
-    ws = wb.active
-
-    labels = row_labels(ws)
-
-    campaign_row = labels.get("campaign", [None])[0]
-    geo_row = labels.get("geo", [None])[0]
-    format_row = labels.get("format", [None])[0]
-    date_row = labels.get("date", [None])[0]
-
-    mapped = {}
-
-    # KPI
-    hmap = header_map(ws, campaign_row)
-    data_row = campaign_row + 1
-
-    mapped["{{CAMPAIGN_NAME}}"] = str(ws.cell(data_row, 2).value)
-    mapped["{{DELIVERED_IMPRESSIONS}}"] = fmt_int(ws.cell(data_row, find_column(hmap, KPI_TOKENS["impressions"]) or 0).value)
-    mapped["{{PERFORMANCE_CTR}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["ctr"]) or 0).value)
-    mapped["{{PERFORMANCE_ENGAGEMENT_RATE}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["engagement_rate"]) or 0).value)
-    mapped["{{PERFORMANCE_VCR}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["vcr"]) or 0).value, 1)
-    mapped["{{PERFORMANCE_ON_SCREEN}}"] = fmt_pct(ws.cell(data_row, find_column(hmap, KPI_TOKENS["on_screen"]) or 0).value, 1)
-    mapped["{{CAMPAIGN_BUDGET}}"] = fmt_cur(ws.cell(data_row, find_column(hmap, KPI_TOKENS["spend"]) or 0).value)
-
-    # Dates
-    start, end = detect_dates(ws, date_row)
-    if not start:
-        start, end = fallback_dates(eoc_path.name)
-
-    if start:
-        mapped["{{LIVE_DATES_FULL}}"] = f"{start.strftime('%d %B')} - {end.strftime('%d %B %Y')}"
-        mapped["{{LIVE_DATES_SHORT}}"] = f"{start.strftime('%d %b')} - {end.strftime('%d %b')}"
-        mapped["{{CAMPAIGN_PERIOD}}"] = f"Q{((start.month - 1)//3)+1} {start.year}"
-
-    # Formats
-    if format_row:
-        vals = []
-        for r in collect_rows(ws, format_row + 1):
-            v = ws.cell(r, 2).value
-            if v:
-                vals.append(str(v))
-        mapped["{{CAMPAIGN_FORMATS}}"] = ", ".join(set(vals))
-
-    # Markets
-    if geo_row:
-        vals = []
-        for r in collect_rows(ws, geo_row + 1):
-            v = ws.cell(r, 2).value
-            if v:
-                vals.append(str(v))
-        mapped["{{CAMPAIGN_MARKETS}}"] = ", ".join(set(vals))
-
-    mapped["{{CLIENT_NAME}}"] = detect_brand(eoc_path.name)
-
-    mapped = normalize_mapped_values(mapped)
-
-    return mapped, {"status": "ok"}
-
-
-# -------------------------
-# PPT replacement
-# -------------------------
-def replace_placeholders(template_path, out_path, repl):
-    prs = Presentation(str(template_path))
-
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            if hasattr(shape, "text_frame"):
-                for p in shape.text_frame.paragraphs:
-                    for run in p.runs:
-                        text = run.text
-                        for k, v in repl.items():
-                            if k in text:
-                                text = text.replace(k, str(v))
-                        run.text = text
-
-    prs.save(str(out_path))
-
-
-# -------------------------
-# API
-# -------------------------
-@app.post("/validate-eoc")
-async def validate_eoc(eoc_file: UploadFile = File(...)):
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / eoc_file.filename
-        with path.open("wb") as f:
-            shutil.copyfileobj(eoc_file.file, f)
-
-        rules = load_rules_config(RULES_WORKBOOK)
-        mapped, logs = map_eoc(path, DEFAULT_TEMPLATE, rules)
-
-        return JSONResponse({"mapped_values": mapped, "logs": logs})
-
-
-@app.post("/generate-exec-summary")
-async def generate_exec_summary(eoc_file: UploadFile = File(...)):
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / eoc_file.filename
-        with path.open("wb") as f:
-            shutil.copyfileobj(eoc_file.file, f)
-
-        rules = load_rules_config(RULES_WORKBOOK)
-        mapped, logs = map_eoc(path, DEFAULT_TEMPLATE, rules)
-
-        ok, missing = validate_export_ready(mapped)
-        if not ok:
-            raise HTTPException(422, detail={"missing": missing})
-
-        out_path = Path(tmp) / "output.pptx"
-        replace_placeholders(DEFAULT_TEMPLATE, out_path, mapped)
-
-        final = OUTPUT_DIR / "Exec_Summary_Output.pptx"
-        shutil.copy2(out_path, final)
-
-        return FileResponse(final)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+            },
+        )
