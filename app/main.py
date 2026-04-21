@@ -318,33 +318,16 @@ async def validate_eoc(eoc_file: UploadFile = File(...)):
         mapped = map_eoc_phase1(eoc_path)
         return JSONResponse(content=mapped)
 
-@app.post("/generate-exec-summary")
+DEFAULT_TEMPLATE = BASE_DIR / "assets" / "Executive Summary_PCA_One Pager_MASTER.pptx"
+
 async def generate_exec_summary(
     eoc_file: UploadFile = File(...),
-    template_file: UploadFile = File(...),
+    template_file: UploadFile | None = File(None),
 ):
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-
-        eoc_path = tmp / eoc_file.filename
-        template_path = tmp / template_file.filename
-
-        with eoc_path.open("wb") as f:
-            shutil.copyfileobj(eoc_file.file, f)
-
-        with template_path.open("wb") as f:
-            shutil.copyfileobj(template_file.file, f)
-
-        mapped = map_eoc_phase1(eoc_path)
-
-        out_path = tmp / "output.pptx"
-        replace_placeholders(template_path, out_path, mapped)
-
-        final_path = OUTPUT_DIR / "Exec_Summary_Output.pptx"
-        shutil.copy2(out_path, final_path)
-
-        return FileResponse(
-            path=str(final_path),
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            filename="Exec_Summary.pptx",
+   if template_file:
+    template_path = tmp / template_file.filename
+    with template_path.open("wb") as f:
+        shutil.copyfileobj(template_file.file, f)
+else:
+    template_path = DEFAULT_TEMPLATE
         )
