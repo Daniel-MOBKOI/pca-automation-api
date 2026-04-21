@@ -4,6 +4,8 @@ import re
 import math
 import json
 import logging
+import numpy as np
+from numbers import Real
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -120,18 +122,16 @@ def fmt_date_full(dt: Optional[datetime]) -> Optional[str]:
 
 def safe_jsonable(obj: Any) -> Any:
     if isinstance(obj, dict):
-        return {k: safe_jsonable(v) for k, v in obj.items()}
+        return {str(k): safe_jsonable(v) for k, v in obj.items()}
 
-    if isinstance(obj, list):
+    if isinstance(obj, (list, tuple, set)):
         return [safe_jsonable(v) for v in obj]
 
-    if isinstance(obj, tuple):
-        return [safe_jsonable(v) for v in obj]
-
-    if isinstance(obj, float):
-        if math.isnan(obj) or math.isinf(obj):
+    try:
+        if pd.isna(obj):
             return None
-        return obj
+    except Exception:
+        pass
 
     if isinstance(obj, pd.Timestamp):
         return obj.isoformat()
@@ -139,10 +139,21 @@ def safe_jsonable(obj: Any) -> Any:
     if isinstance(obj, datetime):
         return obj.isoformat()
 
-    if pd.isna(obj):
-        return None
+    if isinstance(obj, np.generic):
+        obj = obj.item()
 
-    return obj
+    if isinstance(obj, Real):
+        value = float(obj)
+        if math.isnan(value) or math.isinf(value):
+            return None
+        if float(value).is_integer():
+            return int(value)
+        return value
+
+    if isinstance(obj, (str, bool, int)) or obj is None:
+        return obj
+
+    return str(obj)
 
 
 HEADER_ALIASES: Dict[str, List[str]] = {
