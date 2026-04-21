@@ -12,11 +12,14 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pptx import Presentation
 
-app = FastAPI(title="PCA Automation API", version="2.1.0")
+app = FastAPI(title="PCA Automation API", version="2.2.0")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+ASSETS_DIR = BASE_DIR / "assets"
+DEFAULT_TEMPLATE = ASSETS_DIR / "Executive Summary_PCA_One Pager_MASTER.pptx"
 
 # -------------------------
 # Formatting helpers
@@ -86,7 +89,6 @@ def find_column(hmap: Dict[str, int], token_groups: List[List[str]]) -> Optional
 # Detection rules
 # -------------------------
 KPI_TOKENS = {
-    "campaign_name": [["campaign"]],
     "impressions": [["impressions"]],
     "ctr": [["ctr"]],
     "engagement_rate": [["engagement", "rate"], ["er"]],
@@ -127,8 +129,6 @@ def fallback_weekly_dates(filename: str) -> tuple[Optional[datetime], Optional[d
     if not match:
         return None, None
 
-    # weekly fallback:
-    # filename date treated as day after final day in prior tests
     end = datetime(int(match.group(3)), int(match.group(2)), int(match.group(1))) - timedelta(days=1)
     start = end - timedelta(days=6)
     return start, end
@@ -148,10 +148,7 @@ def map_eoc_phase1(eoc_path: Path) -> Dict[str, str]:
 
     mapped: Dict[str, str] = {}
 
-    # -------------------------
-    # Campaign / KPI table
-    # Phase 1: use first campaign-like KPI table found
-    # -------------------------
+    # KPI / Campaign table
     campaign_header = None
     best_score = -1
 
@@ -195,9 +192,7 @@ def map_eoc_phase1(eoc_path: Path) -> Dict[str, str]:
         mapped["{{PERFORMANCE_ON_SCREEN}}"] = "N/A"
         mapped["{{CAMPAIGN_BUDGET}}"] = "N/A"
 
-    # -------------------------
-    # Phase 1 leaves AV fields unresolved
-    # -------------------------
+    # AV / Delivery left as N/A in phase 1
     for key in [
         "{{IO_OVERALL_IMPRESSIONS}}",
         "{{ADDED_VALUE_IMPRESSIONS}}",
@@ -207,9 +202,7 @@ def map_eoc_phase1(eoc_path: Path) -> Dict[str, str]:
     ]:
         mapped[key] = "N/A"
 
-    # -------------------------
     # Dates
-    # -------------------------
     start_date, end_date = detect_date_range_from_table(ws, date_rows[0] if date_rows else None)
     if start_date is None or end_date is None:
         start_date, end_date = fallback_weekly_dates(eoc_path.name)
@@ -223,9 +216,7 @@ def map_eoc_phase1(eoc_path: Path) -> Dict[str, str]:
         mapped["{{LIVE_DATES_SHORT}}"] = "N/A"
         mapped["{{CAMPAIGN_PERIOD}}"] = "N/A"
 
-    # -------------------------
     # Formats
-    # -------------------------
     if format_rows:
         values = [
             str(ws.cell(r, 2).value)
@@ -236,9 +227,7 @@ def map_eoc_phase1(eoc_path: Path) -> Dict[str, str]:
     else:
         mapped["{{CAMPAIGN_FORMATS}}"] = "N/A"
 
-    # -------------------------
     # Markets
-    # -------------------------
     if geo_rows:
         values = [
             str(ws.cell(r, 2).value)
@@ -249,14 +238,10 @@ def map_eoc_phase1(eoc_path: Path) -> Dict[str, str]:
     else:
         mapped["{{CAMPAIGN_MARKETS}}"] = "N/A"
 
-    # -------------------------
-    # Brand / client
-    # -------------------------
+    # Brand / Client
     mapped["{{CLIENT_NAME}}"] = detect_brand(eoc_path.name, str(campaign_name_raw) if campaign_name_raw else None)
 
-    # -------------------------
-    # Phase 1 leaves Top Titles unresolved
-    # -------------------------
+    # Top titles left as N/A in phase 1
     for prefix in ["CTR", "ER", "VCR"]:
         for i in range(1, 6):
             mapped[f"{{{{TOP_TITLES_{prefix}_{i}_NAME}}}}"] = "N/A"
@@ -307,7 +292,10 @@ def health():
     return {"status": "ok"}
 
 @app.post("/validate-eoc")
-async def validate_eoc(eoc_file: UploadFile = File(...)):
+async def validate_eoc(
+    eoc_file: UploadFile = File(...),
+    template_file: UploadFile | None = File(None),
+):
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
 
@@ -318,16 +306,34 @@ async def validate_eoc(eoc_file: UploadFile = File(...)):
         mapped = map_eoc_phase1(eoc_path)
         return JSONResponse(content=mapped)
 
-DEFAULT_TEMPLATE = BASE_DIR / "assets" / "Executive Summary_PCA_One Pager_MASTER.pptx"
-
+@app.post("/generate-exec-summary")
 async def generate_exec_summary(
     eoc_file: UploadFile = File(...),
     template_file: UploadFile | None = File(None),
 ):
-   if template_file:
-    template_path = tmp / template_file.filename
-    with template_path.open("wb") as f:
-        shutil.copyfileobj(template_file.file, f)
-else:
-    template_path = DEFAULT_TEMPLATE
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+
+        eoc_path = tmp / eoc_file.filename
+        with eoc_path.open("wb") as f:
+            shutil.copyfileobj(eoc_file.file, f)
+
+        if template_file:
+            template_path = tmp / template_file.filename
+            with template_path.open("wb") as f:
+                shutil.copyfileobj(template_file.file, f)
+        else:
+            template_path = DEFAULT_TEMPLATE
+
+        out_path = tmp / "output.pptx"
+        mapped = map_eoc_phase1(eoc_path)
+        replace_placeholders(template_path, out_path, mapped)
+
+        final_path = OUTPUT_DIR / "Exec_Summary_Output.pptx"
+        shutil.copy2(out_path, final_path)
+
+        return FileResponse(
+            path=str(final_path),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            filename="Exec_Summary.pptx",
         )
