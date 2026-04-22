@@ -9,24 +9,20 @@ import traceback
 
 app = FastAPI()
 
+# -------------------------
+# PATHS
+# -------------------------
 BASE_DIR = Path("/tmp")
 OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-TEMPLATE_PATH = BASE_DIR / "template.pptx"
+# ✅ TEMPLATE (FROM REPO ROOT)
+TEMPLATE_PATH = Path("Executive Summary_PCA_One Pager_MASTER.pptx")
 
 
 # -------------------------
 # HELPERS
 # -------------------------
-def find_value(ws, keyword):
-    for row in ws.iter_rows(values_only=True):
-        for cell in row:
-            if cell and keyword.lower() in str(cell).lower():
-                return cell
-    return None
-
-
 def safe_number(val):
     try:
         return float(val)
@@ -34,8 +30,14 @@ def safe_number(val):
         return None
 
 
+def clean_string(val):
+    if val is None:
+        return None
+    return str(val).strip()
+
+
 # -------------------------
-# CORE EXTRACTION (WORKING VERSION)
+# CORE EXTRACTION (STABLE)
 # -------------------------
 def extract_eoc_data(filepath):
     wb = openpyxl.load_workbook(filepath, data_only=True)
@@ -43,12 +45,12 @@ def extract_eoc_data(filepath):
     result = {
         "CAMPAIGN_NAME": None,
         "DELIVERED_IMPRESSIONS": None,
-        "CTR": None,
-        "ENGAGEMENT_RATE": None,
-        "VCR": None,
-        "SPEND": None,
-        "MARKETS": None,
-        "LIVE_DATES": None,
+        "PERFORMANCE_CTR": None,
+        "PERFORMANCE_ENGAGEMENT_RATE": None,
+        "PERFORMANCE_VCR": None,
+        "CAMPAIGN_BUDGET": None,
+        "CAMPAIGN_MARKETS": None,
+        "LIVE_DATES_FULL": None,
     }
 
     try:
@@ -60,7 +62,7 @@ def extract_eoc_data(filepath):
 
                 # Campaign Name
                 if "campaign" in row_values and not result["CAMPAIGN_NAME"]:
-                    result["CAMPAIGN_NAME"] = row[1]
+                    result["CAMPAIGN_NAME"] = clean_string(row[1])
 
                 # Impressions
                 if "impressions" in row_values:
@@ -68,30 +70,30 @@ def extract_eoc_data(filepath):
 
                 # CTR
                 if "ctr" in row_values:
-                    result["CTR"] = row[1]
+                    result["PERFORMANCE_CTR"] = clean_string(row[1])
 
-                # Engagement
+                # Engagement Rate
                 if "engagement" in row_values:
-                    result["ENGAGEMENT_RATE"] = row[1]
+                    result["PERFORMANCE_ENGAGEMENT_RATE"] = clean_string(row[1])
 
                 # VCR
                 if "vcr" in row_values:
-                    result["VCR"] = row[1]
+                    result["PERFORMANCE_VCR"] = clean_string(row[1])
 
-                # Spend
+                # Spend / Budget
                 if "spend" in row_values or "budget" in row_values:
-                    result["SPEND"] = safe_number(row[1])
+                    result["CAMPAIGN_BUDGET"] = safe_number(row[1])
 
                 # Markets
                 if "market" in row_values or "geo" in row_values:
-                    result["MARKETS"] = row[1]
+                    result["CAMPAIGN_MARKETS"] = clean_string(row[1])
 
                 # Dates
                 if "date" in row_values:
-                    result["LIVE_DATES"] = row[1]
+                    result["LIVE_DATES_FULL"] = clean_string(row[1])
 
     except Exception as e:
-        print("ERROR:", e)
+        print("EXTRACTION ERROR:", e)
 
     return result
 
@@ -108,11 +110,17 @@ def populate_ppt(data, output_path):
                 continue
 
             for paragraph in shape.text_frame.paragraphs:
+
+                text = paragraph.text
+
                 for key, value in data.items():
-                    if value is None:
-                        value = "N/A"
-                    if f"{{{{{key}}}}}" in paragraph.text:
-                        paragraph.text = paragraph.text.replace(f"{{{{{key}}}}}", str(value))
+                    placeholder = f"{{{{{key}}}}}"
+
+                    if placeholder in text:
+                        replacement = str(value) if value is not None else "N/A"
+                        text = text.replace(placeholder, replacement)
+
+                paragraph.text = text
 
     prs.save(output_path)
 
