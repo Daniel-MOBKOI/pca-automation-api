@@ -8,9 +8,20 @@ import traceback
 import math
 import re
 
-app = FastAPI(title="PCA Automation API", version="8.3.5")
+APP_VERSION = "9.0.0"
+app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
 BASE_DIR = Path("/tmp")
+
+# -------------------------
+# HEALTH
+# -------------------------
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "version": APP_VERSION
+    }
 
 # -------------------------
 # HELPERS
@@ -21,7 +32,7 @@ def clean_text(value):
     try:
         if pd.isna(value):
             return ""
-    except:
+    except Exception:
         pass
     return str(value).strip()
 
@@ -33,12 +44,18 @@ def normalize_header(value):
 def safe_number(value):
     try:
         if isinstance(value, str):
-            value = value.replace(",", "").replace("£", "").replace("%", "")
+            value = (
+                value.replace(",", "")
+                .replace("£", "")
+                .replace("$", "")
+                .replace("€", "")
+                .replace("%", "")
+            )
         value = float(value)
         if math.isnan(value) or math.isinf(value):
             return None
         return value
-    except:
+    except Exception:
         return None
 
 
@@ -51,9 +68,8 @@ def safe_percent(value):
 
         if num > 1:
             return f"{round(num, 2)}%"
-        else:
-            return f"{round(num * 100, 2)}%"
-    except:
+        return f"{round(num * 100, 2)}%"
+    except Exception:
         return None
 
 
@@ -63,7 +79,7 @@ def format_date(text):
         if match:
             dt = datetime.strptime(match.group(), "%Y-%m-%d")
             return dt.strftime("%d %b %Y")
-    except:
+    except Exception:
         pass
     return None
 
@@ -128,20 +144,25 @@ def extract_data(sheets):
         if campaign_col and impressions_col:
             row = temp.iloc[0]
 
+            ctr_col = find_col(temp, ALIASES["ctr"])
+            engagement_col = find_col(temp, ALIASES["engagement"])
+            vcr_col = find_col(temp, ALIASES["vcr"])
+            spend_col = find_col(temp, ALIASES["spend"])
+
             return {
                 "CAMPAIGN_NAME": clean_text(row[campaign_col]),
                 "DELIVERED_IMPRESSIONS": safe_number(row[impressions_col]),
-                "CTR": safe_percent(row[find_col(temp, ALIASES["ctr"])]) if find_col(temp, ALIASES["ctr"]) else None,
-                "ENGAGEMENT_RATE": safe_percent(row[find_col(temp, ALIASES["engagement"])]) if find_col(temp, ALIASES["engagement"]) else None,
-                "VCR": safe_percent(row[find_col(temp, ALIASES["vcr"])]) if find_col(temp, ALIASES["vcr"]) else None,
-                "SPEND": safe_number(row[find_col(temp, ALIASES["spend"])]) if find_col(temp, ALIASES["spend"]) else None,
+                "CTR": safe_percent(row[ctr_col]) if ctr_col else None,
+                "ENGAGEMENT_RATE": safe_percent(row[engagement_col]) if engagement_col else None,
+                "VCR": safe_percent(row[vcr_col]) if vcr_col else None,
+                "SPEND": safe_number(row[spend_col]) if spend_col else None,
             }
 
     return {}
 
 
 # -------------------------
-# 🔥 FINAL TOP TITLES
+# TOP TITLES
 # -------------------------
 def extract_top_titles(sheets):
     for df in sheets.values():
@@ -154,9 +175,6 @@ def extract_top_titles(sheets):
         temp.columns = [clean_text(c) for c in temp.iloc[0]]
         temp = temp[1:].reset_index(drop=True)
 
-        cols = [normalize_header(c) for c in temp.columns]
-
-        # detect site-like column
         site_col = None
         for col in temp.columns:
             if any(x in normalize_header(col) for x in ["site", "domain", "publisher", "environment", "property"]):
@@ -166,7 +184,6 @@ def extract_top_titles(sheets):
         if not site_col:
             continue
 
-        # 🔥 flexible metric selection
         metric_col = (
             find_col(temp, ALIASES["ctr"]) or
             find_col(temp, ALIASES["engagement"]) or
@@ -178,13 +195,11 @@ def extract_top_titles(sheets):
 
         temp = temp[[site_col, metric_col]].copy()
         temp[metric_col] = temp[metric_col].apply(safe_number)
-
         temp = temp.dropna().sort_values(by=metric_col, ascending=False)
 
         result = {}
         for i in range(min(3, len(temp))):
             row = temp.iloc[i]
-
             result[f"TOP_TITLE_{i+1}_NAME"] = clean_text(row[site_col])
 
             if "impression" in normalize_header(metric_col):
@@ -233,11 +248,16 @@ async def validate_eoc(eoc_file: UploadFile = File(...)):
 
         return JSONResponse(content={
             "status": "validated",
-            "mapped_values": data
+            "mapped_values": data,
+            "version": APP_VERSION
         })
 
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"error": str(e), "trace": traceback.format_exc()}
+            content={
+                "error": str(e),
+                "trace": traceback.format_exc(),
+                "version": APP_VERSION
+            }
         )
