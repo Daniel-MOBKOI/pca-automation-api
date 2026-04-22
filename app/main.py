@@ -330,7 +330,13 @@ def classify_table(df: pd.DataFrame) -> str:
 
     date_col = find_col(df, "date")
     if date_col:
-        sample = [parse_date_from_any(v) for v in df[date_col].head(10).tolist()]
+        col_data = df[date_col]
+
+        # duplicate column names can return a DataFrame instead of Series
+        if isinstance(col_data, pd.DataFrame):
+            col_data = col_data.iloc[:, 0]
+
+        sample = [parse_date_from_any(v) for v in col_data.head(10).values]
         if any(v is not None for v in sample):
             return "date"
 
@@ -457,7 +463,11 @@ def extract_dates(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFr
     if date_df is not None:
         date_col = find_col(date_df, "date")
         if date_col:
-            vals = [parse_date_from_any(v) for v in date_df[date_col].tolist()]
+            col_data = date_df[date_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+
+            vals = [parse_date_from_any(v) for v in col_data.tolist()]
             vals = [v for v in vals if v]
             if vals:
                 return min(vals), max(vals)
@@ -497,12 +507,10 @@ def extract_client_name(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.
                 if candidate:
                     return candidate
 
-    # fallback from campaign name
     kpi_df = detected.get("campaign_kpi_summary")
     if kpi_df is not None:
         campaign_val = clean_text(extract_kpi_value(kpi_df, "campaign"))
         if campaign_val:
-            # take leading brand-ish token before separators
             for sep in [" - ", " | ", "_"]:
                 if sep in campaign_val:
                     return clean_text(campaign_val.split(sep)[0])
@@ -524,15 +532,24 @@ def extract_kpi_value(df: pd.DataFrame, key: str) -> Any:
     col = find_col(df, key)
     if not col:
         return None
-    return first_non_empty(df[col])
+
+    col_data = df[col]
+    if isinstance(col_data, pd.DataFrame):
+        col_data = col_data.iloc[:, 0]
+
+    return first_non_empty(col_data)
 
 def join_dimension_values(df: pd.DataFrame, dim_key: str) -> Optional[str]:
     col = find_col(df, dim_key)
     if not col:
         return None
 
+    col_data = df[col]
+    if isinstance(col_data, pd.DataFrame):
+        col_data = col_data.iloc[:, 0]
+
     vals = []
-    for value in df[col].tolist():
+    for value in col_data.tolist():
         txt = clean_text(value)
         if not txt:
             continue
@@ -552,12 +569,24 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
     if not site_col or not metric_col:
         return {}
 
-    temp = df[[site_col, metric_col]].copy()
-    temp[metric_col] = temp[metric_col].apply(safe_number)
-    temp = temp.dropna(subset=[metric_col])
+    site_data = df[site_col]
+    if isinstance(site_data, pd.DataFrame):
+        site_data = site_data.iloc[:, 0]
+
+    metric_data = df[metric_col]
+    if isinstance(metric_data, pd.DataFrame):
+        metric_data = metric_data.iloc[:, 0]
+
+    temp = pd.DataFrame({
+        "site": site_data,
+        "metric": metric_data
+    })
+
+    temp["metric"] = temp["metric"].apply(safe_number)
+    temp = temp.dropna(subset=["metric"])
 
     temp = temp[
-        temp[site_col].apply(
+        temp["site"].apply(
             lambda x: clean_text(x).lower() not in ["site", "publisher", "domain", "environment", "property", "placement"]
         )
     ]
@@ -565,7 +594,7 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
     if temp.empty:
         return {}
 
-    temp = temp.sort_values(by=metric_col, ascending=False).head(max_rank)
+    temp = temp.sort_values(by="metric", ascending=False).head(max_rank)
 
     prefix = {
         "ctr": "TOP_TITLES_CTR",
@@ -575,8 +604,8 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
 
     out = {}
     for idx, (_, row) in enumerate(temp.iterrows(), start=1):
-        out[f"{prefix}_{idx}_NAME"] = clean_text(row[site_col])
-        out[f"{prefix}_{idx}_VALUE"] = format_percent(row[metric_col])
+        out[f"{prefix}_{idx}_NAME"] = clean_text(row["site"])
+        out[f"{prefix}_{idx}_VALUE"] = format_percent(row["metric"])
 
     return out
 
@@ -642,11 +671,20 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         generic_col = find_col(kpi_df, "on_screen")
 
         if mobkoi_col:
-            on_screen_val = first_non_empty(kpi_df[mobkoi_col])
+            col_data = kpi_df[mobkoi_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+            on_screen_val = first_non_empty(col_data)
         elif mrc_col:
-            on_screen_val = first_non_empty(kpi_df[mrc_col])
+            col_data = kpi_df[mrc_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+            on_screen_val = first_non_empty(col_data)
         elif generic_col:
-            on_screen_val = first_non_empty(kpi_df[generic_col])
+            col_data = kpi_df[generic_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+            on_screen_val = first_non_empty(col_data)
 
         mapped["PERFORMANCE_ON_SCREEN"] = format_percent(on_screen_val)
 
