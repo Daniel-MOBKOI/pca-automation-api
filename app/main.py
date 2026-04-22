@@ -11,7 +11,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 from pptx import Presentation
 
-APP_VERSION = "10.0.2"
+APP_VERSION = "10.0.3"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
@@ -73,6 +73,12 @@ def safe_number(value: Any) -> Optional[float]:
     except Exception:
         return None
 
+def abs_number(value: Any) -> Optional[float]:
+    num = safe_number(value)
+    if num is None:
+        return None
+    return abs(num)
+
 def format_number(value: Optional[float], decimals: int = 0) -> Optional[str]:
     if value is None:
         return None
@@ -115,18 +121,15 @@ def parse_date_from_any(value: Any) -> Optional[datetime]:
     if not text:
         return None
 
-    # strict direct parse
     try:
         dt = pd.to_datetime(text, errors="coerce")
         if pd.notna(dt):
             py_dt = dt.to_pydatetime()
-            # reject obviously bad years from noisy text parsing
             if 2000 <= py_dt.year <= 2100:
                 return py_dt
     except Exception:
         pass
 
-    # explicit yyyy-mm-dd
     match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
     if match:
         try:
@@ -134,7 +137,6 @@ def parse_date_from_any(value: Any) -> Optional[datetime]:
         except Exception:
             pass
 
-    # explicit dd/mm/yyyy or dd-mm-yyyy
     match = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]20\d{2})\b", text)
     if match:
         try:
@@ -210,7 +212,7 @@ ALIASES = {
     "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)", "worth of added value"],
     "site": ["site", "publisher", "domain", "environment", "property", "placement"],
     "geo": ["geo", "market", "country", "region"],
-    "format": ["format", "creative format", "ad format", "unit type"],
+    "format": ["format", "creative", "creative format", "ad format", "unit type"],
     "date": ["date", "report date", "served date", "live date"],
 }
 
@@ -245,7 +247,7 @@ def score_header_row(row_values: List[Any]) -> int:
     keywords = [
         "campaign", "impressions", "ctr", "engagement", "vcr", "completion",
         "spend", "site", "publisher", "domain", "environment", "property",
-        "geo", "market", "country", "region", "format", "date",
+        "geo", "market", "country", "region", "format", "creative", "date",
         "sold paid units", "delivered overall av", "delivery percentage", "mrc viewability"
     ]
     score = 0
@@ -264,7 +266,6 @@ def find_candidate_header_rows(df: pd.DataFrame) -> List[int]:
         if score >= 3:
             candidates.append(i)
 
-    # dedupe nearby rows
     deduped = []
     for idx in candidates:
         if not deduped or idx - deduped[-1] > 2:
@@ -281,10 +282,8 @@ def build_block_from_header(df: pd.DataFrame, header_row: int) -> pd.DataFrame:
 
     temp.columns = [clean_text(c) for c in temp.iloc[0]]
     temp = temp[1:].reset_index(drop=True)
-
     temp = temp.dropna(axis=1, how="all")
 
-    # stop at first blank streak or before next obvious header row
     rows = []
     blank_streak = 0
     for _, row in temp.iterrows():
@@ -304,14 +303,13 @@ def build_block_from_header(df: pd.DataFrame, header_row: int) -> pd.DataFrame:
 
     block = pd.DataFrame(rows, columns=temp.columns)
 
-    # drop repeated header rows
     if not block.empty:
         header_norm = [normalize_header(c) for c in block.columns]
         keep_rows = []
         for _, row in block.iterrows():
-            row_vals = [normalize_header(v) for v in row.tolist()]
+            row_norm = [normalize_header(v) for v in row.tolist()]
             same_count = 0
-            for a, b in zip(header_norm[:12], row_vals[:12]):
+            for a, b in zip(header_norm[:12], row_norm[:12]):
                 if a and b and a == b:
                     same_count += 1
             keep_rows.append(same_count < 3)
@@ -329,8 +327,12 @@ def classify_table(df: pd.DataFrame) -> str:
         return "geo"
     if find_col(df, "format"):
         return "format"
-    if find_col(df, "date"):
-        return "date"
+
+    date_col = find_col(df, "date")
+    if date_col:
+        sample = [parse_date_from_any(v) for v in df[date_col].head(10).tolist()]
+        if any(v is not None for v in sample):
+            return "date"
 
     delivery_hits = sum([
         1 if find_col(df, "sold_paid_units") else 0,
@@ -451,7 +453,6 @@ def scan_workbook_texts(sheets: Dict[str, pd.DataFrame]) -> List[str]:
     return texts
 
 def extract_dates(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFrame], filename: str = "") -> Tuple[Optional[datetime], Optional[datetime]]:
-    # 1. Date table first
     date_df = detected.get("date")
     if date_df is not None:
         date_col = find_col(date_df, "date")
@@ -461,17 +462,13 @@ def extract_dates(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFr
             if vals:
                 return min(vals), max(vals)
 
-    # 2. explicit Report Date metadata only
-    texts = scan_workbook_texts(sheets)
-    for text in texts:
+    for text in scan_workbook_texts(sheets):
         low = normalize_text(text)
         if "report date" in low:
             dt = parse_date_from_any(text)
             if dt:
-                # weekly fallback from report date
                 return dt - timedelta(days=6), dt
 
-    # 3. filename fallback for weekly reports
     match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", filename or "")
     if match:
         end_dt = parse_date_from_any(match.group(1))
@@ -499,6 +496,19 @@ def extract_client_name(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.
                 candidate = clean_text(parts[-1])
                 if candidate:
                     return candidate
+
+    # fallback from campaign name
+    kpi_df = detected.get("campaign_kpi_summary")
+    if kpi_df is not None:
+        campaign_val = clean_text(extract_kpi_value(kpi_df, "campaign"))
+        if campaign_val:
+            # take leading brand-ish token before separators
+            for sep in [" - ", " | ", "_"]:
+                if sep in campaign_val:
+                    return clean_text(campaign_val.split(sep)[0])
+            words = campaign_val.split()
+            if words:
+                return words[0]
 
     if filename:
         base = Path(filename).stem
@@ -570,6 +580,38 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
 
     return out
 
+def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    required_core = [
+        "CAMPAIGN_NAME",
+        "DELIVERED_IMPRESSIONS",
+        "PERFORMANCE_CTR",
+        "PERFORMANCE_ENGAGEMENT_RATE",
+        "PERFORMANCE_VCR",
+        "LIVE_DATES_FULL",
+    ]
+
+    missing_required = [k for k in required_core if not mapped.get(k)]
+
+    warnings = []
+    if not mapped.get("CLIENT_NAME"):
+        warnings.append("CLIENT_NAME missing")
+    if not mapped.get("CAMPAIGN_MARKETS"):
+        warnings.append("CAMPAIGN_MARKETS missing")
+    if not mapped.get("CAMPAIGN_FORMATS"):
+        warnings.append("CAMPAIGN_FORMATS missing")
+    if not mapped.get("TOP_TITLES_CTR_1_NAME"):
+        warnings.append("Top Titles CTR missing")
+    if not mapped.get("TOP_TITLES_VCR_1_NAME"):
+        warnings.append("Top Titles VCR missing")
+    if not mapped.get("TOP_TITLES_ER_1_NAME"):
+        warnings.append("Top Titles ER missing")
+
+    return {
+        "is_valid": len(missing_required) == 0,
+        "missing_required": missing_required,
+        "warnings": warnings,
+    }
+
 def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> Dict[str, Any]:
     rules = load_rules_master()
     rules_available = rules is not None
@@ -594,7 +636,6 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped["PERFORMANCE_ENGAGEMENT_RATE"] = format_percent(extract_kpi_value(kpi_df, "engagement_rate"))
         mapped["PERFORMANCE_VCR"] = format_percent(extract_kpi_value(kpi_df, "vcr"))
 
-        # prefer Mobkoi On Screen, fallback to MRC Viewability, then generic on_screen
         on_screen_val = None
         mobkoi_col = find_col(kpi_df, "mobkoi_on_screen")
         mrc_col = find_col(kpi_df, "mrc_viewability")
@@ -621,14 +662,15 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped["CAMPAIGN_BUDGET"] = None
 
     if delivery_df is not None:
-        mapped["IO_OVERALL_IMPRESSIONS"] = format_number(safe_number(extract_kpi_value(delivery_df, "sold_paid_units")), 0)
-        mapped["DELIVERED_OVERALL_AV_UNITS"] = format_number(safe_number(extract_kpi_value(delivery_df, "delivered_overall_av_units")), 0)
+        io_val = safe_number(extract_kpi_value(delivery_df, "sold_paid_units"))
+        av_units_val = abs_number(extract_kpi_value(delivery_df, "delivered_overall_av_units"))
+        av_amount_val = abs_number(extract_kpi_value(delivery_df, "delivered_av_amount"))
+
+        mapped["IO_OVERALL_IMPRESSIONS"] = format_number(io_val, 0)
+        mapped["DELIVERED_OVERALL_AV_UNITS"] = format_number(av_units_val, 0)
         mapped["DELIVERY_WITH_AV_PERCENT"] = format_percent(extract_kpi_value(delivery_df, "delivery_incl_av"))
-
-        av_amount = safe_number(extract_kpi_value(delivery_df, "delivered_av_amount"))
-        mapped["ADDED_VALUE_WORTH"] = format_currency(abs(av_amount) if av_amount is not None else None)
-
-        mapped["ADDED_VALUE_IMPRESSIONS"] = mapped["DELIVERED_OVERALL_AV_UNITS"]
+        mapped["ADDED_VALUE_WORTH"] = format_currency(av_amount_val)
+        mapped["ADDED_VALUE_IMPRESSIONS"] = format_number(av_units_val, 0)
     else:
         mapped["IO_OVERALL_IMPRESSIONS"] = None
         mapped["DELIVERED_OVERALL_AV_UNITS"] = None
@@ -653,6 +695,8 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
             mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
             mapped.setdefault(f"{metric_prefix}_{i}_VALUE", None)
 
+    validation = validate_mapped_values(mapped)
+
     diagnostics = {
         "detected_tables": list(detected.keys()),
         "table_columns": {k: [str(c) for c in v.columns] for k, v in detected.items()},
@@ -662,6 +706,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
 
     return {
         "mapped_values": mapped,
+        "validation": validation,
         "diagnostics": diagnostics,
     }
 
