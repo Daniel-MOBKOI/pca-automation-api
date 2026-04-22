@@ -8,7 +8,7 @@ import traceback
 import math
 import re
 
-app = FastAPI(title="PCA Automation API", version="8.3.4")
+app = FastAPI(title="PCA Automation API", version="8.3.5")
 
 BASE_DIR = Path("/tmp")
 
@@ -141,12 +141,9 @@ def extract_data(sheets):
 
 
 # -------------------------
-# TOP TITLES (SMART DETECTION)
+# 🔥 FINAL TOP TITLES
 # -------------------------
 def extract_top_titles(sheets):
-    best_df = None
-    best_score = -1
-
     for df in sheets.values():
         if df is None or df.empty:
             continue
@@ -159,46 +156,45 @@ def extract_top_titles(sheets):
 
         cols = [normalize_header(c) for c in temp.columns]
 
-        score = 0
+        # detect site-like column
+        site_col = None
+        for col in temp.columns:
+            if any(x in normalize_header(col) for x in ["site", "domain", "publisher", "environment", "property"]):
+                site_col = col
+                break
 
-        if any(x in c for c in cols for x in ["site", "domain", "publisher", "environment", "property"]):
-            score += 3
+        if not site_col:
+            continue
 
-        if any("ctr" in c for c in cols):
-            score += 2
+        # 🔥 flexible metric selection
+        metric_col = (
+            find_col(temp, ALIASES["ctr"]) or
+            find_col(temp, ALIASES["engagement"]) or
+            find_col(temp, ALIASES["impressions"])
+        )
 
-        if score > best_score:
-            best_score = score
-            best_df = temp
+        if not metric_col:
+            continue
 
-    if best_df is None:
-        return {}
+        temp = temp[[site_col, metric_col]].copy()
+        temp[metric_col] = temp[metric_col].apply(safe_number)
 
-    df = best_df
+        temp = temp.dropna().sort_values(by=metric_col, ascending=False)
 
-    site_col = None
-    for col in df.columns:
-        if any(x in normalize_header(col) for x in ["site", "domain", "publisher", "environment", "property"]):
-            site_col = col
-            break
+        result = {}
+        for i in range(min(3, len(temp))):
+            row = temp.iloc[i]
 
-    ctr_col = find_col(df, ALIASES["ctr"])
+            result[f"TOP_TITLE_{i+1}_NAME"] = clean_text(row[site_col])
 
-    if not site_col or not ctr_col:
-        return {}
+            if "impression" in normalize_header(metric_col):
+                result[f"TOP_TITLE_{i+1}_CTR"] = str(int(row[metric_col]))
+            else:
+                result[f"TOP_TITLE_{i+1}_CTR"] = safe_percent(row[metric_col])
 
-    df = df[[site_col, ctr_col]].copy()
-    df[ctr_col] = df[ctr_col].apply(safe_number)
+        return result
 
-    df = df.dropna().sort_values(by=ctr_col, ascending=False)
-
-    result = {}
-    for i in range(min(3, len(df))):
-        row = df.iloc[i]
-        result[f"TOP_TITLE_{i+1}_NAME"] = clean_text(row[site_col])
-        result[f"TOP_TITLE_{i+1}_CTR"] = safe_percent(row[ctr_col])
-
-    return result
+    return {}
 
 
 # -------------------------
@@ -219,7 +215,7 @@ def extract_date(sheets):
 
 
 # -------------------------
-# VALIDATE ENDPOINT
+# VALIDATE
 # -------------------------
 @app.post("/validate-eoc")
 async def validate_eoc(eoc_file: UploadFile = File(...)):
@@ -243,8 +239,5 @@ async def validate_eoc(eoc_file: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={
-                "error": str(e),
-                "trace": traceback.format_exc()
-            }
+            content={"error": str(e), "trace": traceback.format_exc()}
         )
