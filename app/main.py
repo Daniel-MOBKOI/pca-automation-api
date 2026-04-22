@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse, FileResponse
 import pandas as pd
 import shutil
@@ -11,7 +11,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 from pptx import Presentation
 
-APP_VERSION = "10.0.1"
+APP_VERSION = "10.0.2"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
@@ -115,17 +115,32 @@ def parse_date_from_any(value: Any) -> Optional[datetime]:
     if not text:
         return None
 
+    # strict direct parse
     try:
         dt = pd.to_datetime(text, errors="coerce")
         if pd.notna(dt):
-            return dt.to_pydatetime()
+            py_dt = dt.to_pydatetime()
+            # reject obviously bad years from noisy text parsing
+            if 2000 <= py_dt.year <= 2100:
+                return py_dt
     except Exception:
         pass
 
-    match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+    # explicit yyyy-mm-dd
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
     if match:
         try:
-            return datetime.strptime(match.group(), "%Y-%m-%d")
+            return datetime.strptime(match.group(1), "%Y-%m-%d")
+        except Exception:
+            pass
+
+    # explicit dd/mm/yyyy or dd-mm-yyyy
+    match = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]20\d{2})\b", text)
+    if match:
+        try:
+            dt = pd.to_datetime(match.group(1), dayfirst=True, errors="coerce")
+            if pd.notna(dt):
+                return dt.to_pydatetime()
         except Exception:
             pass
 
@@ -155,14 +170,13 @@ def first_non_empty(series: pd.Series) -> Any:
             return value
     return None
 
+def is_blank_row(values: List[Any]) -> bool:
+    return all(clean_text(v) == "" for v in values)
+
 # -------------------------
-# RULES MASTER LOADER
+# RULES MASTER LOADER (OPTIONAL)
 # -------------------------
 def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
-    """
-    Optional loader.
-    If the Rules Master is not present on Render, continue without it.
-    """
     if not RULES_MASTER_PATH.exists():
         return None
 
@@ -186,12 +200,14 @@ ALIASES = {
     "ctr": ["ctr", "click through rate", "click-through rate"],
     "engagement_rate": ["engagement rate", "engagement %", "er", "total er", "overall er"],
     "vcr": ["video completion rate", "vcr", "completed view rate", "video % complete"],
-    "on_screen": ["mobkoi on screen", "on screen", "on-screen", "viewability", "viewable rate", "mrc viewability"],
+    "on_screen": ["mobkoi on screen", "on screen", "on-screen", "mrc viewability", "viewability", "viewable rate"],
+    "mobkoi_on_screen": ["mobkoi on screen"],
+    "mrc_viewability": ["mrc viewability"],
     "spend": ["actual spend", "spend", "total spend", "media spend"],
     "sold_paid_units": ["sold paid units"],
     "delivered_overall_av_units": ["delivered overall av units", "delivered overall av (units)"],
     "delivery_incl_av": ["delivery percentage incl av", "delivery percentage (incl av)"],
-    "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)"],
+    "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)", "worth of added value"],
     "site": ["site", "publisher", "domain", "environment", "property", "placement"],
     "geo": ["geo", "market", "country", "region"],
     "format": ["format", "creative format", "ad format", "unit type"],
@@ -223,12 +239,14 @@ def find_col(df: pd.DataFrame, key: str) -> Optional[str]:
     return best_col if best_score >= 60 else None
 
 # -------------------------
-# TABLE DETECTION
+# MULTI-BLOCK TABLE DETECTION
 # -------------------------
 def score_header_row(row_values: List[Any]) -> int:
     keywords = [
         "campaign", "impressions", "ctr", "engagement", "vcr", "completion",
-        "spend", "site", "geo", "market", "country", "format", "date"
+        "spend", "site", "publisher", "domain", "environment", "property",
+        "geo", "market", "country", "region", "format", "date",
+        "sold paid units", "delivered overall av", "delivery percentage", "mrc viewability"
     ]
     score = 0
     for cell in row_values:
@@ -238,42 +256,73 @@ def score_header_row(row_values: List[Any]) -> int:
                 score += 1
     return score
 
-def find_header_row(df: pd.DataFrame) -> int:
-    best_row = 0
-    best_score = -1
-    for i in range(min(40, len(df))):
-        score = score_header_row(df.iloc[i].tolist())
-        if score > best_score:
-            best_score = score
-            best_row = i
-    return best_row
+def find_candidate_header_rows(df: pd.DataFrame) -> List[int]:
+    candidates = []
+    for i in range(min(120, len(df))):
+        row_values = df.iloc[i].tolist()
+        score = score_header_row(row_values)
+        if score >= 3:
+            candidates.append(i)
 
-def prepare_sheet_table(df: pd.DataFrame) -> pd.DataFrame:
+    # dedupe nearby rows
+    deduped = []
+    for idx in candidates:
+        if not deduped or idx - deduped[-1] > 2:
+            deduped.append(idx)
+    return deduped
+
+def build_block_from_header(df: pd.DataFrame, header_row: int) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
 
-    header_row = find_header_row(df)
     temp = df.iloc[header_row:].copy()
+    if temp.empty:
+        return pd.DataFrame()
+
     temp.columns = [clean_text(c) for c in temp.iloc[0]]
     temp = temp[1:].reset_index(drop=True)
 
     temp = temp.dropna(axis=1, how="all")
 
-    if not temp.empty:
-        first_row_norm = [normalize_header(c) for c in temp.columns]
+    # stop at first blank streak or before next obvious header row
+    rows = []
+    blank_streak = 0
+    for _, row in temp.iterrows():
+        row_vals = row.tolist()
+
+        if is_blank_row(row_vals):
+            blank_streak += 1
+            if blank_streak >= 1:
+                break
+            continue
+
+        blank_streak = 0
+        rows.append(row_vals)
+
+    if not rows:
+        return pd.DataFrame(columns=temp.columns)
+
+    block = pd.DataFrame(rows, columns=temp.columns)
+
+    # drop repeated header rows
+    if not block.empty:
+        header_norm = [normalize_header(c) for c in block.columns]
         keep_rows = []
-        for _, row in temp.iterrows():
+        for _, row in block.iterrows():
             row_vals = [normalize_header(v) for v in row.tolist()]
             same_count = 0
-            for a, b in zip(first_row_norm[:10], row_vals[:10]):
+            for a, b in zip(header_norm[:12], row_vals[:12]):
                 if a and b and a == b:
                     same_count += 1
             keep_rows.append(same_count < 3)
-        temp = temp[pd.Series(keep_rows).values].reset_index(drop=True)
+        block = block[pd.Series(keep_rows).values].reset_index(drop=True)
 
-    return temp
+    return block
 
 def classify_table(df: pd.DataFrame) -> str:
+    if df is None or df.empty:
+        return "unknown"
+
     if find_col(df, "site"):
         return "site"
     if find_col(df, "geo"):
@@ -298,7 +347,7 @@ def classify_table(df: pd.DataFrame) -> str:
         1 if find_col(df, "ctr") else 0,
         1 if find_col(df, "engagement_rate") else 0,
         1 if find_col(df, "vcr") else 0,
-        1 if find_col(df, "on_screen") else 0,
+        1 if (find_col(df, "mobkoi_on_screen") or find_col(df, "mrc_viewability") or find_col(df, "on_screen")) else 0,
         1 if find_col(df, "spend") else 0,
     ])
     if kpi_hits >= 3:
@@ -306,21 +355,82 @@ def classify_table(df: pd.DataFrame) -> str:
 
     return "unknown"
 
+def table_quality_score(df: pd.DataFrame, table_type: str) -> int:
+    if df is None or df.empty:
+        return -999
+
+    score = 0
+    score += min(len(df.columns), 20)
+    score += min(len(df), 10)
+
+    if table_type == "campaign_kpi_summary":
+        for key in ["campaign", "impressions", "ctr", "engagement_rate", "vcr", "spend"]:
+            if find_col(df, key):
+                score += 10
+        if find_col(df, "mobkoi_on_screen"):
+            score += 12
+        elif find_col(df, "mrc_viewability"):
+            score += 6
+
+    elif table_type == "campaign_delivery":
+        for key in ["sold_paid_units", "delivered_overall_av_units", "delivery_incl_av", "delivered_av_amount"]:
+            if find_col(df, key):
+                score += 12
+
+    elif table_type == "site":
+        for key in ["site", "ctr", "engagement_rate", "vcr"]:
+            if find_col(df, key):
+                score += 10
+
+    elif table_type == "geo":
+        for key in ["geo", "impressions"]:
+            if find_col(df, key):
+                score += 10
+
+    elif table_type == "format":
+        for key in ["format", "impressions"]:
+            if find_col(df, key):
+                score += 10
+
+    elif table_type == "date":
+        if find_col(df, "date"):
+            score += 20
+
+    return score
+
 def detect_tables(sheets: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
-    detected = {}
+    candidates_by_type: Dict[str, List[Tuple[int, pd.DataFrame]]] = {
+        "campaign_kpi_summary": [],
+        "campaign_delivery": [],
+        "site": [],
+        "geo": [],
+        "format": [],
+        "date": [],
+    }
 
     for _, raw_df in sheets.items():
         if raw_df is None or raw_df.empty:
             continue
 
-        temp = prepare_sheet_table(raw_df)
-        if temp.empty:
-            continue
+        header_rows = find_candidate_header_rows(raw_df)
 
-        t = classify_table(temp)
+        for header_row in header_rows:
+            block = build_block_from_header(raw_df, header_row)
+            if block.empty:
+                continue
 
-        if t != "unknown" and t not in detected:
-            detected[t] = temp
+            table_type = classify_table(block)
+            if table_type == "unknown":
+                continue
+
+            score = table_quality_score(block, table_type)
+            candidates_by_type[table_type].append((score, block))
+
+    detected: Dict[str, pd.DataFrame] = {}
+    for table_type, candidates in candidates_by_type.items():
+        if candidates:
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            detected[table_type] = candidates[0][1]
 
     return detected
 
@@ -341,6 +451,7 @@ def scan_workbook_texts(sheets: Dict[str, pd.DataFrame]) -> List[str]:
     return texts
 
 def extract_dates(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFrame], filename: str = "") -> Tuple[Optional[datetime], Optional[datetime]]:
+    # 1. Date table first
     date_df = detected.get("date")
     if date_df is not None:
         date_col = find_col(date_df, "date")
@@ -350,16 +461,18 @@ def extract_dates(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFr
             if vals:
                 return min(vals), max(vals)
 
+    # 2. explicit Report Date metadata only
     texts = scan_workbook_texts(sheets)
-    all_dates = []
     for text in texts:
-        dt = parse_date_from_any(text)
-        if dt:
-            all_dates.append(dt)
-    if all_dates:
-        return min(all_dates), max(all_dates)
+        low = normalize_text(text)
+        if "report date" in low:
+            dt = parse_date_from_any(text)
+            if dt:
+                # weekly fallback from report date
+                return dt - timedelta(days=6), dt
 
-    match = re.search(r"(\d{4}-\d{2}-\d{2})", filename or "")
+    # 3. filename fallback for weekly reports
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", filename or "")
     if match:
         end_dt = parse_date_from_any(match.group(1))
         if end_dt:
@@ -458,7 +571,6 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
     return out
 
 def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> Dict[str, Any]:
-    # Optional only - do not fail if missing
     rules = load_rules_master()
     rules_available = rules is not None
 
@@ -481,7 +593,21 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped["PERFORMANCE_CTR"] = format_percent(extract_kpi_value(kpi_df, "ctr"))
         mapped["PERFORMANCE_ENGAGEMENT_RATE"] = format_percent(extract_kpi_value(kpi_df, "engagement_rate"))
         mapped["PERFORMANCE_VCR"] = format_percent(extract_kpi_value(kpi_df, "vcr"))
-        mapped["PERFORMANCE_ON_SCREEN"] = format_percent(extract_kpi_value(kpi_df, "on_screen"))
+
+        # prefer Mobkoi On Screen, fallback to MRC Viewability, then generic on_screen
+        on_screen_val = None
+        mobkoi_col = find_col(kpi_df, "mobkoi_on_screen")
+        mrc_col = find_col(kpi_df, "mrc_viewability")
+        generic_col = find_col(kpi_df, "on_screen")
+
+        if mobkoi_col:
+            on_screen_val = first_non_empty(kpi_df[mobkoi_col])
+        elif mrc_col:
+            on_screen_val = first_non_empty(kpi_df[mrc_col])
+        elif generic_col:
+            on_screen_val = first_non_empty(kpi_df[generic_col])
+
+        mapped["PERFORMANCE_ON_SCREEN"] = format_percent(on_screen_val)
 
         spend_val = extract_kpi_value(kpi_df, "spend")
         mapped["CAMPAIGN_BUDGET"] = format_currency(safe_number(spend_val))
