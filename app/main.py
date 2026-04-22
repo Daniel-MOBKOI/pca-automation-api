@@ -11,7 +11,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 from pptx import Presentation
 
-APP_VERSION = "10.0.3"
+APP_VERSION = "10.0.4"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
@@ -331,8 +331,6 @@ def classify_table(df: pd.DataFrame) -> str:
     date_col = find_col(df, "date")
     if date_col:
         col_data = df[date_col]
-
-        # duplicate column names can return a DataFrame instead of Series
         if isinstance(col_data, pd.DataFrame):
             col_data = col_data.iloc[:, 0]
 
@@ -548,19 +546,42 @@ def join_dimension_values(df: pd.DataFrame, dim_key: str) -> Optional[str]:
     if isinstance(col_data, pd.DataFrame):
         col_data = col_data.iloc[:, 0]
 
-    vals = []
-    for value in col_data.tolist():
-        txt = clean_text(value)
-        if not txt:
-            continue
-        if txt.lower() in [normalize_header(c) for c in df.columns]:
-            continue
-        if txt not in vals:
-            vals.append(txt)
+    raw_vals = [clean_text(v) for v in col_data.tolist() if clean_text(v)]
 
-    if not vals:
+    if not raw_vals:
         return None
-    return ", ".join(vals)
+
+    base = raw_vals[0]
+    cleaned = [base]
+
+    for val in raw_vals[1:]:
+        parts_base = base.split(" - ")
+        parts_val = val.split(" - ")
+
+        suffix = parts_val
+
+        for i in range(min(len(parts_base), len(parts_val))):
+            if parts_base[i] != parts_val[i]:
+                suffix = parts_val[i:]
+                break
+        else:
+            if len(parts_val) > len(parts_base):
+                suffix = parts_val[len(parts_base):]
+            else:
+                suffix = [val]
+
+        candidate = " - ".join([p for p in suffix if p])
+        if candidate:
+            cleaned.append(candidate)
+
+    seen = []
+    final = []
+    for v in cleaned:
+        if v not in seen:
+            seen.append(v)
+            final.append(v)
+
+    return ", ".join(final)
 
 def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> Dict[str, Any]:
     site_col = find_col(df, "site")
@@ -838,8 +859,11 @@ async def generate_exec_summary(
             data=mapped_data
         )
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        final = OUTPUT_DIR / f"Exec_Summary_Output_{timestamp}.pptx"
+        campaign_name = mapped_data.get("CAMPAIGN_NAME", "Campaign")
+        safe_campaign = re.sub(r'[\\/*?:"<>|]', "", campaign_name)
+        filename = f"Exec Summary_PCA One Pager_{safe_campaign}.pptx"
+
+        final = OUTPUT_DIR / filename
         shutil.copy2(temp_output, final)
 
         return FileResponse(
