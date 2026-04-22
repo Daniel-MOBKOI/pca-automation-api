@@ -9,7 +9,7 @@ from pptx import Presentation
 import math
 import re
 
-app = FastAPI(title="PCA Automation API", version="8.2.0")
+app = FastAPI(title="PCA Automation API", version="8.2.1")
 
 # -------------------------
 # CONFIG
@@ -33,6 +33,11 @@ def health():
 def clean_text(value):
     if value is None:
         return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
@@ -46,12 +51,12 @@ def normalize_header(value):
 def safe_number(value):
     try:
         if isinstance(value, str):
-            value = value.replace(",", "").replace("£", "").replace("$", "").replace("%", "")
+            value = value.replace(",", "").replace("£", "").replace("$", "").replace("€", "").replace("%", "")
         value = float(value)
         if math.isnan(value) or math.isinf(value):
             return None
         return value
-    except:
+    except Exception:
         return None
 
 
@@ -65,33 +70,33 @@ def safe_percent(value):
 
 
 # -------------------------
-# DATE FORMAT (RULE FIX)
+# DATE FORMAT
 # -------------------------
 def format_date(date_str):
     try:
-        # Extract date like 2026-03-19
         match = re.search(r"\d{4}-\d{2}-\d{2}", str(date_str))
         if match:
             dt = datetime.strptime(match.group(), "%Y-%m-%d")
             return dt.strftime("%d %b %Y")
-    except:
+    except Exception:
         pass
     return None
 
 
 # -------------------------
-# HEADER DETECTION (FIX)
+# HEADER DETECTION
 # -------------------------
 def find_header_row(df):
     keywords = ["campaign", "impressions", "ctr", "engagement", "vcr", "spend"]
 
-    for i in range(min(15, len(df))):
-        row = df.iloc[i].astype(str).str.lower()
+    for i in range(min(20, len(df))):
+        row = df.iloc[i].tolist()
 
         score = 0
         for cell in row:
+            cell_text = clean_text(cell).lower()
             for kw in keywords:
-                if kw in cell:
+                if kw in cell_text:
                     score += 1
 
         if score >= 3:
@@ -105,11 +110,11 @@ def find_header_row(df):
 # -------------------------
 ALIASES = {
     "campaign": ["campaign", "campaign name"],
-    "impressions": ["delivered impressions", "impressions"],
-    "ctr": ["ctr"],
-    "engagement": ["engagement rate", "er"],
+    "impressions": ["delivered impressions", "impressions", "served impressions"],
+    "ctr": ["ctr", "click through rate", "click-through rate"],
+    "engagement": ["engagement rate", "total er", "er"],
     "vcr": ["vcr", "video completion rate"],
-    "spend": ["spend", "actual spend"],
+    "spend": ["spend", "actual spend", "media spend"],
     "date": ["report date", "date"]
 }
 
@@ -118,8 +123,16 @@ def find_col(df, aliases):
     for col in df.columns:
         norm = normalize_header(col)
         for alias in aliases:
-            if alias in norm:
+            if normalize_header(alias) in norm:
                 return col
+    return None
+
+
+def first_valid_value(series):
+    for value in series:
+        text = clean_text(value)
+        if text != "":
+            return value
     return None
 
 
@@ -134,24 +147,34 @@ def extract_data(sheets):
         if df is None or df.empty:
             continue
 
-        header_row = find_header_row(df)
+        raw_df = df.copy()
+        header_row = find_header_row(raw_df)
 
-        df = df.iloc[header_row:]
-        df.columns = df.iloc[0]
-        df = df[1:]
+        df = raw_df.iloc[header_row:].copy()
+        df.columns = [clean_text(c) for c in df.iloc[0]]
+        df = df[1:].reset_index(drop=True)
 
         score = 0
         cols = [normalize_header(c) for c in df.columns]
 
-        if any("campaign" in c for c in cols): score += 2
-        if any("impressions" in c for c in cols): score += 2
-        if any("ctr" in c for c in cols): score += 2
+        if any("campaign" in c for c in cols):
+            score += 2
+        if any("impressions" in c for c in cols):
+            score += 2
+        if any("ctr" in c for c in cols):
+            score += 2
+        if any("engagement" in c for c in cols):
+            score += 2
+        if any("vcr" in c or "video completion rate" in c for c in cols):
+            score += 2
+        if any("spend" in c for c in cols):
+            score += 2
 
         if score > best_score:
             best_score = score
             best_df = df
 
-    if best_df is None:
+    if best_df is None or best_df.empty:
         return {}
 
     df = best_df
@@ -176,14 +199,15 @@ def extract_data(sheets):
 
 
 # -------------------------
-# DATE EXTRACTION (FIXED)
+# DATE EXTRACTION
 # -------------------------
 def extract_date(sheets):
     for df in sheets.values():
-        if df is None:
+        if df is None or df.empty:
             continue
 
-        for row in df.head(10).values:
+        preview = df.head(15)
+        for row in preview.values:
             for cell in row:
                 text = clean_text(cell)
                 if "report date" in text.lower():
@@ -193,7 +217,7 @@ def extract_date(sheets):
 
 
 # -------------------------
-# PPT FUNCTIONS (UNCHANGED)
+# PPT FUNCTIONS
 # -------------------------
 def replace_text(text, data):
     if not text:
@@ -201,7 +225,7 @@ def replace_text(text, data):
 
     for key, value in data.items():
         placeholder = f"{{{{{key}}}}}"
-        text = text.replace(placeholder, str(value) if value else "")
+        text = text.replace(placeholder, str(value) if value is not None else "")
 
     return text
 
@@ -234,7 +258,7 @@ async def validate_eoc(eoc_file: UploadFile = File(...)):
         with open(path, "wb") as f:
             shutil.copyfileobj(eoc_file.file, f)
 
-        sheets = pd.read_excel(path, sheet_name=None)
+        sheets = pd.read_excel(path, sheet_name=None, header=None)
 
         data = extract_data(sheets)
         data["REPORT_DATE"] = extract_date(sheets)
@@ -269,7 +293,7 @@ async def generate_exec_summary(
         with open(template_path, "wb") as f:
             shutil.copyfileobj(template_file.file, f)
 
-        sheets = pd.read_excel(eoc_path, sheet_name=None)
+        sheets = pd.read_excel(eoc_path, sheet_name=None, header=None)
 
         data = extract_data(sheets)
         data["REPORT_DATE"] = extract_date(sheets)
@@ -277,7 +301,11 @@ async def generate_exec_summary(
         output = OUTPUT_DIR / "output.pptx"
         generate_ppt(template_path, output, data)
 
-        return FileResponse(output)
+        return FileResponse(
+            path=str(output),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            filename="Exec_Summary_Output.pptx",
+        )
 
     except Exception as e:
         return JSONResponse(
