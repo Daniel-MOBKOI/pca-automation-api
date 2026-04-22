@@ -13,7 +13,11 @@ from pptx import Presentation
 
 APP_VERSION = "10.0.4"
 
-app = FastAPI(title="PCA Automation API", version=APP_VERSION)
+app = FastAPI(
+    title="PCA Automation API",
+    version=APP_VERSION,
+    servers=[{"url": "https://pca-automation-api.onrender.com"}]
+)
 
 # -------------------------
 # CONFIG
