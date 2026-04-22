@@ -11,7 +11,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 from pptx import Presentation
 
-APP_VERSION = "10.0.0"
+APP_VERSION = "10.0.1"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
@@ -115,7 +115,6 @@ def parse_date_from_any(value: Any) -> Optional[datetime]:
     if not text:
         return None
 
-    # direct pandas parse
     try:
         dt = pd.to_datetime(text, errors="coerce")
         if pd.notna(dt):
@@ -123,7 +122,6 @@ def parse_date_from_any(value: Any) -> Optional[datetime]:
     except Exception:
         pass
 
-    # explicit yyyy-mm-dd extraction
     match = re.search(r"\d{4}-\d{2}-\d{2}", text)
     if match:
         try:
@@ -160,16 +158,23 @@ def first_non_empty(series: pd.Series) -> Any:
 # -------------------------
 # RULES MASTER LOADER
 # -------------------------
-def load_rules_master() -> Dict[str, pd.DataFrame]:
+def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
+    """
+    Optional loader.
+    If the Rules Master is not present on Render, continue without it.
+    """
     if not RULES_MASTER_PATH.exists():
-        raise FileNotFoundError(f"Rules Master not found: {RULES_MASTER_PATH}")
+        return None
 
-    xls = pd.ExcelFile(RULES_MASTER_PATH, engine="openpyxl")
-    out = {}
-    for sheet in xls.sheet_names:
-        df = pd.read_excel(RULES_MASTER_PATH, sheet_name=sheet, engine="openpyxl")
-        out[sheet] = df
-    return out
+    try:
+        xls = pd.ExcelFile(RULES_MASTER_PATH, engine="openpyxl")
+        out = {}
+        for sheet in xls.sheet_names:
+            df = pd.read_excel(RULES_MASTER_PATH, sheet_name=sheet, engine="openpyxl")
+            out[sheet] = df
+        return out
+    except Exception:
+        return None
 
 # -------------------------
 # COLUMN MATCHING
@@ -252,10 +257,8 @@ def prepare_sheet_table(df: pd.DataFrame) -> pd.DataFrame:
     temp.columns = [clean_text(c) for c in temp.iloc[0]]
     temp = temp[1:].reset_index(drop=True)
 
-    # drop empty cols
     temp = temp.dropna(axis=1, how="all")
 
-    # drop repeated header rows
     if not temp.empty:
         first_row_norm = [normalize_header(c) for c in temp.columns]
         keep_rows = []
@@ -271,8 +274,6 @@ def prepare_sheet_table(df: pd.DataFrame) -> pd.DataFrame:
     return temp
 
 def classify_table(df: pd.DataFrame) -> str:
-    cols = [normalize_header(c) for c in df.columns]
-
     if find_col(df, "site"):
         return "site"
     if find_col(df, "geo"):
@@ -282,7 +283,6 @@ def classify_table(df: pd.DataFrame) -> str:
     if find_col(df, "date"):
         return "date"
 
-    # delivery block
     delivery_hits = sum([
         1 if find_col(df, "sold_paid_units") else 0,
         1 if find_col(df, "delivered_overall_av_units") else 0,
@@ -292,7 +292,6 @@ def classify_table(df: pd.DataFrame) -> str:
     if delivery_hits >= 2:
         return "campaign_delivery"
 
-    # KPI block
     kpi_hits = sum([
         1 if find_col(df, "campaign") else 0,
         1 if find_col(df, "impressions") else 0,
@@ -320,7 +319,6 @@ def detect_tables(sheets: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
 
         t = classify_table(temp)
 
-        # keep first good one, but let explicit tables override unknown
         if t != "unknown" and t not in detected:
             detected[t] = temp
 
@@ -343,7 +341,6 @@ def scan_workbook_texts(sheets: Dict[str, pd.DataFrame]) -> List[str]:
     return texts
 
 def extract_dates(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFrame], filename: str = "") -> Tuple[Optional[datetime], Optional[datetime]]:
-    # 1. Date table first
     date_df = detected.get("date")
     if date_df is not None:
         date_col = find_col(date_df, "date")
@@ -353,7 +350,6 @@ def extract_dates(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFr
             if vals:
                 return min(vals), max(vals)
 
-    # 2. metadata / workbook text
     texts = scan_workbook_texts(sheets)
     all_dates = []
     for text in texts:
@@ -363,7 +359,6 @@ def extract_dates(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFr
     if all_dates:
         return min(all_dates), max(all_dates)
 
-    # 3. filename fallback for weekly reports
     match = re.search(r"(\d{4}-\d{2}-\d{2})", filename or "")
     if match:
         end_dt = parse_date_from_any(match.group(1))
@@ -374,7 +369,6 @@ def extract_dates(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFr
     return None, None
 
 def extract_client_name(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.DataFrame], filename: str = "") -> Optional[str]:
-    # 1 explicit field in detected tables
     for table_name in ["campaign_kpi_summary", "campaign_delivery"]:
         df = detected.get(table_name)
         if df is not None:
@@ -384,7 +378,6 @@ def extract_client_name(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.
                 if clean_text(val):
                     return clean_text(val)
 
-    # 2 workbook title/meta
     for text in scan_workbook_texts(sheets):
         low = normalize_text(text)
         if "client:" in low or "brand:" in low:
@@ -394,7 +387,6 @@ def extract_client_name(sheets: Dict[str, pd.DataFrame], detected: Dict[str, pd.
                 if candidate:
                     return candidate
 
-    # 3 filename prefix
     if filename:
         base = Path(filename).stem
         if " - " in base:
@@ -441,8 +433,11 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
     temp[metric_col] = temp[metric_col].apply(safe_number)
     temp = temp.dropna(subset=[metric_col])
 
-    # remove obvious header-ish rows
-    temp = temp[temp[site_col].apply(lambda x: clean_text(x).lower() not in ["site", "publisher", "domain", "environment", "property", "placement"])]
+    temp = temp[
+        temp[site_col].apply(
+            lambda x: clean_text(x).lower() not in ["site", "publisher", "domain", "environment", "property", "placement"]
+        )
+    ]
 
     if temp.empty:
         return {}
@@ -463,7 +458,10 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
     return out
 
 def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> Dict[str, Any]:
+    # Optional only - do not fail if missing
     rules = load_rules_master()
+    rules_available = rules is not None
+
     detected = detect_tables(sheets)
 
     kpi_df = detected.get("campaign_kpi_summary")
@@ -477,7 +475,6 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
 
     mapped = {}
 
-    # Core campaign fields
     if kpi_df is not None:
         mapped["CAMPAIGN_NAME"] = clean_text(extract_kpi_value(kpi_df, "campaign"))
         mapped["DELIVERED_IMPRESSIONS"] = format_number(safe_number(extract_kpi_value(kpi_df, "impressions")), 0)
@@ -488,7 +485,6 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
 
         spend_val = extract_kpi_value(kpi_df, "spend")
         mapped["CAMPAIGN_BUDGET"] = format_currency(safe_number(spend_val))
-
     else:
         mapped["CAMPAIGN_NAME"] = None
         mapped["DELIVERED_IMPRESSIONS"] = None
@@ -498,12 +494,14 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped["PERFORMANCE_ON_SCREEN"] = None
         mapped["CAMPAIGN_BUDGET"] = None
 
-    # Delivery block
     if delivery_df is not None:
         mapped["IO_OVERALL_IMPRESSIONS"] = format_number(safe_number(extract_kpi_value(delivery_df, "sold_paid_units")), 0)
         mapped["DELIVERED_OVERALL_AV_UNITS"] = format_number(safe_number(extract_kpi_value(delivery_df, "delivered_overall_av_units")), 0)
         mapped["DELIVERY_WITH_AV_PERCENT"] = format_percent(extract_kpi_value(delivery_df, "delivery_incl_av"))
-        mapped["ADDED_VALUE_WORTH"] = format_currency(abs(safe_number(extract_kpi_value(delivery_df, "delivered_av_amount"))) if safe_number(extract_kpi_value(delivery_df, "delivered_av_amount")) is not None else None)
+
+        av_amount = safe_number(extract_kpi_value(delivery_df, "delivered_av_amount"))
+        mapped["ADDED_VALUE_WORTH"] = format_currency(abs(av_amount) if av_amount is not None else None)
+
         mapped["ADDED_VALUE_IMPRESSIONS"] = mapped["DELIVERED_OVERALL_AV_UNITS"]
     else:
         mapped["IO_OVERALL_IMPRESSIONS"] = None
@@ -512,7 +510,6 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped["ADDED_VALUE_WORTH"] = None
         mapped["ADDED_VALUE_IMPRESSIONS"] = None
 
-    # Meta fields
     mapped["CLIENT_NAME"] = client_name
     mapped["CAMPAIGN_FORMATS"] = join_dimension_values(format_df, "format") if format_df is not None else None
     mapped["CAMPAIGN_MARKETS"] = join_dimension_values(geo_df, "geo") if geo_df is not None else None
@@ -520,13 +517,11 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
     mapped["LIVE_DATES_FULL"] = format_date_full(start_dt, end_dt)
     mapped["CAMPAIGN_PERIOD"] = format_quarter_from_date(end_dt)
 
-    # Top titles
     if site_df is not None:
         mapped.update(extract_top_titles(site_df, "ctr", 5))
         mapped.update(extract_top_titles(site_df, "engagement_rate", 5))
         mapped.update(extract_top_titles(site_df, "vcr", 5))
 
-    # Default unresolved top-title placeholders to None for visibility
     for metric_prefix in ["TOP_TITLES_CTR", "TOP_TITLES_ER", "TOP_TITLES_VCR"]:
         for i in range(1, 6):
             mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
@@ -535,6 +530,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
     diagnostics = {
         "detected_tables": list(detected.keys()),
         "table_columns": {k: [str(c) for c in v.columns] for k, v in detected.items()},
+        "rules_master_loaded": rules_available,
         "version": APP_VERSION,
     }
 
