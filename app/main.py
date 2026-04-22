@@ -1,236 +1,87 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import pandas as pd
 import shutil
 from pathlib import Path
 from datetime import datetime
 import traceback
-import math
-import re
 
-APP_VERSION = "9.0.0"
-app = FastAPI(title="PCA Automation API", version=APP_VERSION)
+app = FastAPI(title="PCA Automation API", version="7.0.0")
 
+# -------------------------
+# CONFIG
+# -------------------------
 BASE_DIR = Path("/tmp")
+OUTPUT_DIR = BASE_DIR / "outputs"
+OUTPUT_DIR.mkdir(exist_ok=True)
+
 
 # -------------------------
 # HEALTH
 # -------------------------
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "version": APP_VERSION
-    }
+    return {"status": "ok"}
+
 
 # -------------------------
-# HELPERS
+# CORE: EOC PARSER
 # -------------------------
-def clean_text(value):
-    if value is None:
-        return ""
+def extract_eoc_data(df: pd.DataFrame):
+    """
+    Core extraction logic from EOC.
+    Expand this as needed.
+    """
+
+    result = {}
+
     try:
-        if pd.isna(value):
-            return ""
-    except Exception:
-        pass
-    return str(value).strip()
+        # Campaign Name
+        result["campaign_name"] = str(df.iloc[0, 0])
+
+        # Basic metrics (safe access)
+        result["impressions"] = safe_number(df, "Delivered Impressions")
+        result["ctr"] = safe_percent(df, "CTR")
+        result["engagement_rate"] = safe_percent(df, "Engagement Rate")
+        result["vcr"] = safe_percent(df, "VCR")
+
+        result["spend"] = safe_number(df, "Actual Spend")
+
+        # Dates
+        result["report_date"] = safe_date(df)
+
+    except Exception as e:
+        print("Extraction warning:", e)
+
+    return result
 
 
-def normalize_header(value):
-    return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
-
-
-def safe_number(value):
+def safe_number(df, column_name):
     try:
-        if isinstance(value, str):
-            value = (
-                value.replace(",", "")
-                .replace("£", "")
-                .replace("$", "")
-                .replace("€", "")
-                .replace("%", "")
-            )
-        value = float(value)
-        if math.isnan(value) or math.isinf(value):
-            return None
-        return value
-    except Exception:
+        val = df[column_name].dropna().iloc[0]
+        return float(val)
+    except:
         return None
 
 
-def safe_percent(value):
+def safe_percent(df, column_name):
     try:
-        if isinstance(value, str) and "%" in value:
-            return value.strip()
-
-        num = float(value)
-
-        if num > 1:
-            return f"{round(num, 2)}%"
-        return f"{round(num * 100, 2)}%"
-    except Exception:
+        val = df[column_name].dropna().iloc[0]
+        return round(float(val) * 100, 2)
+    except:
         return None
 
 
-def format_date(text):
+def safe_date(df):
     try:
-        match = re.search(r"\d{4}-\d{2}-\d{2}", str(text))
-        if match:
-            dt = datetime.strptime(match.group(), "%Y-%m-%d")
-            return dt.strftime("%d %b %Y")
-    except Exception:
-        pass
-    return None
+        val = df.iloc[0, 1]
+        return str(val)
+    except:
+        return None
 
 
 # -------------------------
-# HEADER DETECTION
-# -------------------------
-def find_header_row(df):
-    keywords = ["campaign", "impressions", "ctr", "engagement", "vcr", "completion", "spend"]
-
-    for i in range(min(20, len(df))):
-        score = 0
-        for cell in df.iloc[i]:
-            text = clean_text(cell).lower()
-            for kw in keywords:
-                if kw in text:
-                    score += 1
-        if score >= 3:
-            return i
-    return 0
-
-
-# -------------------------
-# ALIASES
-# -------------------------
-ALIASES = {
-    "campaign": ["campaign"],
-    "impressions": ["impressions"],
-    "ctr": ["ctr", "click through rate"],
-    "engagement": ["engagement rate", "er"],
-    "vcr": ["vcr", "video completion rate", "completion rate"],
-    "spend": ["spend", "media spend"],
-}
-
-
-def find_col(df, aliases):
-    for col in df.columns:
-        norm = normalize_header(col)
-        for alias in aliases:
-            if normalize_header(alias) in norm:
-                return col
-    return None
-
-
-# -------------------------
-# KPI EXTRACTION
-# -------------------------
-def extract_data(sheets):
-    for df in sheets.values():
-        if df is None or df.empty:
-            continue
-
-        header = find_header_row(df)
-
-        temp = df.iloc[header:].copy()
-        temp.columns = [clean_text(c) for c in temp.iloc[0]]
-        temp = temp[1:].reset_index(drop=True)
-
-        campaign_col = find_col(temp, ALIASES["campaign"])
-        impressions_col = find_col(temp, ALIASES["impressions"])
-
-        if campaign_col and impressions_col:
-            row = temp.iloc[0]
-
-            ctr_col = find_col(temp, ALIASES["ctr"])
-            engagement_col = find_col(temp, ALIASES["engagement"])
-            vcr_col = find_col(temp, ALIASES["vcr"])
-            spend_col = find_col(temp, ALIASES["spend"])
-
-            return {
-                "CAMPAIGN_NAME": clean_text(row[campaign_col]),
-                "DELIVERED_IMPRESSIONS": safe_number(row[impressions_col]),
-                "CTR": safe_percent(row[ctr_col]) if ctr_col else None,
-                "ENGAGEMENT_RATE": safe_percent(row[engagement_col]) if engagement_col else None,
-                "VCR": safe_percent(row[vcr_col]) if vcr_col else None,
-                "SPEND": safe_number(row[spend_col]) if spend_col else None,
-            }
-
-    return {}
-
-
-# -------------------------
-# TOP TITLES
-# -------------------------
-def extract_top_titles(sheets):
-    for df in sheets.values():
-        if df is None or df.empty:
-            continue
-
-        header = find_header_row(df)
-
-        temp = df.iloc[header:].copy()
-        temp.columns = [clean_text(c) for c in temp.iloc[0]]
-        temp = temp[1:].reset_index(drop=True)
-
-        site_col = None
-        for col in temp.columns:
-            if any(x in normalize_header(col) for x in ["site", "domain", "publisher", "environment", "property"]):
-                site_col = col
-                break
-
-        if not site_col:
-            continue
-
-        metric_col = (
-            find_col(temp, ALIASES["ctr"]) or
-            find_col(temp, ALIASES["engagement"]) or
-            find_col(temp, ALIASES["impressions"])
-        )
-
-        if not metric_col:
-            continue
-
-        temp = temp[[site_col, metric_col]].copy()
-        temp[metric_col] = temp[metric_col].apply(safe_number)
-        temp = temp.dropna().sort_values(by=metric_col, ascending=False)
-
-        result = {}
-        for i in range(min(3, len(temp))):
-            row = temp.iloc[i]
-            result[f"TOP_TITLE_{i+1}_NAME"] = clean_text(row[site_col])
-
-            if "impression" in normalize_header(metric_col):
-                result[f"TOP_TITLE_{i+1}_CTR"] = str(int(row[metric_col]))
-            else:
-                result[f"TOP_TITLE_{i+1}_CTR"] = safe_percent(row[metric_col])
-
-        return result
-
-    return {}
-
-
-# -------------------------
-# DATE
-# -------------------------
-def extract_date(sheets):
-    for df in sheets.values():
-        if df is None or df.empty:
-            continue
-
-        for row in df.head(15).values:
-            for cell in row:
-                text = clean_text(cell)
-                if "report date" in text.lower():
-                    return format_date(text)
-
-    return None
-
-
-# -------------------------
-# VALIDATE
+# VALIDATE EOC
 # -------------------------
 @app.post("/validate-eoc")
 async def validate_eoc(eoc_file: UploadFile = File(...)):
@@ -240,16 +91,13 @@ async def validate_eoc(eoc_file: UploadFile = File(...)):
         with open(path, "wb") as f:
             shutil.copyfileobj(eoc_file.file, f)
 
-        sheets = pd.read_excel(path, sheet_name=None, header=None)
+        df = pd.read_excel(path)
 
-        data = extract_data(sheets)
-        data["REPORT_DATE"] = extract_date(sheets)
-        data.update(extract_top_titles(sheets))
+        mapped = extract_eoc_data(df)
 
         return JSONResponse(content={
             "status": "validated",
-            "mapped_values": data,
-            "version": APP_VERSION
+            "mapped_values": mapped
         })
 
     except Exception as e:
@@ -257,7 +105,81 @@ async def validate_eoc(eoc_file: UploadFile = File(...)):
             status_code=500,
             content={
                 "error": str(e),
-                "trace": traceback.format_exc(),
-                "version": APP_VERSION
+                "trace": traceback.format_exc()
+            }
+        )
+
+
+# -------------------------
+# PPT GENERATION ENGINE
+# -------------------------
+def generate_ppt_from_template(template_path: Path, output_path: Path, data: dict):
+    """
+    Placeholder logic.
+    Replace with python-pptx mapping later.
+    """
+
+    # TEMP: just copy template
+    shutil.copy2(template_path, output_path)
+
+
+# -------------------------
+# GENERATE EXEC SUMMARY
+# -------------------------
+@app.post("/generate-exec-summary")
+async def generate_exec_summary(
+    eoc_file: UploadFile = File(...),
+    template_file: UploadFile = File(...)
+):
+    try:
+        # -------------------------
+        # SAVE FILES
+        # -------------------------
+        eoc_path = BASE_DIR / f"eoc_{datetime.now().timestamp()}.xlsx"
+        template_path = BASE_DIR / f"template_{datetime.now().timestamp()}.pptx"
+
+        with open(eoc_path, "wb") as f:
+            shutil.copyfileobj(eoc_file.file, f)
+
+        with open(template_path, "wb") as f:
+            shutil.copyfileobj(template_file.file, f)
+
+        # -------------------------
+        # PROCESS DATA
+        # -------------------------
+        df = pd.read_excel(eoc_path)
+        mapped_data = extract_eoc_data(df)
+
+        # -------------------------
+        # GENERATE PPT
+        # -------------------------
+        temp_output = OUTPUT_DIR / "temp_output.pptx"
+
+        generate_ppt_from_template(
+            template_path=template_path,
+            output_path=temp_output,
+            data=mapped_data
+        )
+
+        # -------------------------
+        # FINAL OUTPUT (NO CACHE BUG)
+        # -------------------------
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        final = OUTPUT_DIR / f"Exec_Summary_Output_{timestamp}.pptx"
+
+        shutil.copy2(temp_output, final)
+
+        return FileResponse(
+            path=str(final),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            filename=final.name,
+        )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "trace": traceback.format_exc()
             }
         )
