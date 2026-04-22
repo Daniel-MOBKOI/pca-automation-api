@@ -13,11 +13,12 @@ app = FastAPI()
 # PATHS
 # -------------------------
 BASE_DIR = Path("/tmp")
+
 OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# ✅ TEMPLATE (FROM REPO ROOT)
-TEMPLATE_PATH = Path("Executive Summary_PCA_One Pager_MASTER.pptx")
+TEMPLATE_PATH = Path("assets/Executive Summary_PCA_One Pager_MASTER.pptx")
+RULEBOOK_PATH = Path("assets/PCA_GPT_Rules_Master.xlsx")
 
 
 # -------------------------
