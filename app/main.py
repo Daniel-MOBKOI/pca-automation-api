@@ -8,7 +8,7 @@ import traceback
 import math
 import re
 
-app = FastAPI(title="PCA Automation API", version="8.3.2")
+app = FastAPI(title="PCA Automation API", version="8.3.3")
 
 BASE_DIR = Path("/tmp")
 
@@ -49,7 +49,6 @@ def safe_percent(value):
 
         num = float(value)
 
-        # 🔥 FIX: detect if already %
         if num > 1:
             return f"{round(num, 2)}%"
         else:
@@ -73,7 +72,7 @@ def format_date(text):
 # HEADER DETECTION
 # -------------------------
 def find_header_row(df):
-    keywords = ["campaign", "impressions", "ctr", "engagement", "vcr", "spend"]
+    keywords = ["campaign", "impressions", "ctr", "engagement", "vcr", "completion", "spend"]
 
     for i in range(min(20, len(df))):
         score = 0
@@ -88,16 +87,16 @@ def find_header_row(df):
 
 
 # -------------------------
-# ALIASES
+# ALIASES (EXPANDED)
 # -------------------------
 ALIASES = {
     "campaign": ["campaign"],
     "impressions": ["impressions"],
-    "ctr": ["ctr"],
-    "engagement": ["engagement rate"],
-    "vcr": ["vcr"],
-    "spend": ["spend"],
-    "site": ["site", "placement"]
+    "ctr": ["ctr", "click through rate"],
+    "engagement": ["engagement rate", "er"],
+    "vcr": ["vcr", "video completion rate", "completion rate"],
+    "spend": ["spend", "media spend"],
+    "site": ["site", "placement", "publisher", "domain"]
 }
 
 
@@ -111,7 +110,7 @@ def find_col(df, aliases):
 
 
 # -------------------------
-# KPI EXTRACTION (LOCKED)
+# KPI EXTRACTION
 # -------------------------
 def extract_data(sheets):
     for df in sheets.values():
@@ -126,10 +125,6 @@ def extract_data(sheets):
 
         campaign_col = find_col(temp, ALIASES["campaign"])
         impressions_col = find_col(temp, ALIASES["impressions"])
-        ctr_col = find_col(temp, ALIASES["ctr"])
-        engagement_col = find_col(temp, ALIASES["engagement"])
-        vcr_col = find_col(temp, ALIASES["vcr"])
-        spend_col = find_col(temp, ALIASES["spend"])
 
         if campaign_col and impressions_col:
             row = temp.iloc[0]
@@ -137,17 +132,17 @@ def extract_data(sheets):
             return {
                 "CAMPAIGN_NAME": clean_text(row[campaign_col]),
                 "DELIVERED_IMPRESSIONS": safe_number(row[impressions_col]),
-                "CTR": safe_percent(row[ctr_col]) if ctr_col else None,
-                "ENGAGEMENT_RATE": safe_percent(row[engagement_col]) if engagement_col else None,
-                "VCR": safe_percent(row[vcr_col]) if vcr_col else None,
-                "SPEND": safe_number(row[spend_col]) if spend_col else None,
+                "CTR": safe_percent(row[find_col(temp, ALIASES["ctr"])]) if find_col(temp, ALIASES["ctr"]) else None,
+                "ENGAGEMENT_RATE": safe_percent(row[find_col(temp, ALIASES["engagement"])]) if find_col(temp, ALIASES["engagement"]) else None,
+                "VCR": safe_percent(row[find_col(temp, ALIASES["vcr"])]) if find_col(temp, ALIASES["vcr"]) else None,
+                "SPEND": safe_number(row[find_col(temp, ALIASES["spend"])]) if find_col(temp, ALIASES["spend"]) else None,
             }
 
     return {}
 
 
 # -------------------------
-# TOP TITLES (SAFE)
+# TOP TITLES
 # -------------------------
 def extract_top_titles(sheets):
     for df in sheets.values():
