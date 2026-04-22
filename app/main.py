@@ -1,23 +1,16 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse
 import pandas as pd
 import shutil
 from pathlib import Path
 from datetime import datetime
 import traceback
-from pptx import Presentation
 import math
 import re
 
-app = FastAPI(title="PCA Automation API", version="8.3.1")
+app = FastAPI(title="PCA Automation API", version="8.3.2")
 
 BASE_DIR = Path("/tmp")
-OUTPUT_DIR = BASE_DIR / "outputs"
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
 
 # -------------------------
 # HELPERS
@@ -30,10 +23,12 @@ def clean_text(value):
             return ""
     except:
         pass
-    return re.sub(r"\s+", " ", str(value)).strip()
+    return str(value).strip()
+
 
 def normalize_header(value):
     return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
+
 
 def safe_number(value):
     try:
@@ -46,13 +41,22 @@ def safe_number(value):
     except:
         return None
 
+
 def safe_percent(value):
-    num = safe_number(value)
-    if num is None:
+    try:
+        if isinstance(value, str) and "%" in value:
+            return value.strip()
+
+        num = float(value)
+
+        # 🔥 FIX: detect if already %
+        if num > 1:
+            return f"{round(num, 2)}%"
+        else:
+            return f"{round(num * 100, 2)}%"
+    except:
         return None
-    if num <= 1:
-        num *= 100
-    return f"{round(num, 2)}%"
+
 
 def format_date(text):
     try:
@@ -63,6 +67,7 @@ def format_date(text):
     except:
         pass
     return None
+
 
 # -------------------------
 # HEADER DETECTION
@@ -81,6 +86,7 @@ def find_header_row(df):
             return i
     return 0
 
+
 # -------------------------
 # ALIASES
 # -------------------------
@@ -88,11 +94,12 @@ ALIASES = {
     "campaign": ["campaign"],
     "impressions": ["impressions"],
     "ctr": ["ctr"],
-    "engagement": ["engagement"],
+    "engagement": ["engagement rate"],
     "vcr": ["vcr"],
     "spend": ["spend"],
-    "site": ["site", "placement", "publisher"]
+    "site": ["site", "placement"]
 }
+
 
 def find_col(df, aliases):
     for col in df.columns:
@@ -102,13 +109,11 @@ def find_col(df, aliases):
                 return col
     return None
 
+
 # -------------------------
-# CORE KPI EXTRACTION
+# KPI EXTRACTION (LOCKED)
 # -------------------------
 def extract_data(sheets):
-    best_df = None
-    best_score = -1
-
     for df in sheets.values():
         if df is None or df.empty:
             continue
@@ -119,43 +124,32 @@ def extract_data(sheets):
         temp.columns = [clean_text(c) for c in temp.iloc[0]]
         temp = temp[1:].reset_index(drop=True)
 
-        cols = [normalize_header(c) for c in temp.columns]
+        campaign_col = find_col(temp, ALIASES["campaign"])
+        impressions_col = find_col(temp, ALIASES["impressions"])
+        ctr_col = find_col(temp, ALIASES["ctr"])
+        engagement_col = find_col(temp, ALIASES["engagement"])
+        vcr_col = find_col(temp, ALIASES["vcr"])
+        spend_col = find_col(temp, ALIASES["spend"])
 
-        score = sum([
-            any("campaign" in c for c in cols),
-            any("impressions" in c for c in cols),
-            any("ctr" in c for c in cols),
-            any("engagement" in c for c in cols),
-            any("vcr" in c for c in cols),
-            any("spend" in c for c in cols),
-        ])
+        if campaign_col and impressions_col:
+            row = temp.iloc[0]
 
-        if score > best_score:
-            best_score = score
-            best_df = temp
+            return {
+                "CAMPAIGN_NAME": clean_text(row[campaign_col]),
+                "DELIVERED_IMPRESSIONS": safe_number(row[impressions_col]),
+                "CTR": safe_percent(row[ctr_col]) if ctr_col else None,
+                "ENGAGEMENT_RATE": safe_percent(row[engagement_col]) if engagement_col else None,
+                "VCR": safe_percent(row[vcr_col]) if vcr_col else None,
+                "SPEND": safe_number(row[spend_col]) if spend_col else None,
+            }
 
-    if best_df is None:
-        return {}
+    return {}
 
-    df = best_df
-    row = df.iloc[0]
-
-    return {
-        "CAMPAIGN_NAME": clean_text(row[find_col(df, ALIASES["campaign"])]) if find_col(df, ALIASES["campaign"]) else None,
-        "DELIVERED_IMPRESSIONS": safe_number(row[find_col(df, ALIASES["impressions"])]) if find_col(df, ALIASES["impressions"]) else None,
-        "CTR": safe_percent(row[find_col(df, ALIASES["ctr"])]) if find_col(df, ALIASES["ctr"]) else None,
-        "ENGAGEMENT_RATE": safe_percent(row[find_col(df, ALIASES["engagement"])]) if find_col(df, ALIASES["engagement"]) else None,
-        "VCR": safe_percent(row[find_col(df, ALIASES["vcr"])]) if find_col(df, ALIASES["vcr"]) else None,
-        "SPEND": safe_number(row[find_col(df, ALIASES["spend"])]) if find_col(df, ALIASES["spend"]) else None,
-    }
 
 # -------------------------
-# 🔥 FIXED TOP TITLES
+# TOP TITLES (SAFE)
 # -------------------------
 def extract_top_titles(sheets):
-    best_df = None
-    best_score = -1
-
     for df in sheets.values():
         if df is None or df.empty:
             continue
@@ -166,41 +160,27 @@ def extract_top_titles(sheets):
         temp.columns = [clean_text(c) for c in temp.iloc[0]]
         temp = temp[1:].reset_index(drop=True)
 
-        cols = [normalize_header(c) for c in temp.columns]
+        site_col = find_col(temp, ALIASES["site"])
+        ctr_col = find_col(temp, ALIASES["ctr"])
 
-        score = 0
-        if any("site" in c for c in cols):
-            score += 3
-        if any("ctr" in c for c in cols):
-            score += 2
+        if not site_col or not ctr_col:
+            continue
 
-        if score > best_score:
-            best_score = score
-            best_df = temp
+        temp = temp[[site_col, ctr_col]].copy()
+        temp[ctr_col] = temp[ctr_col].apply(safe_number)
 
-    if best_df is None:
-        return {}
+        temp = temp.dropna().sort_values(by=ctr_col, ascending=False)
 
-    df = best_df
+        result = {}
+        for i in range(min(3, len(temp))):
+            row = temp.iloc[i]
+            result[f"TOP_TITLE_{i+1}_NAME"] = clean_text(row[site_col])
+            result[f"TOP_TITLE_{i+1}_CTR"] = safe_percent(row[ctr_col])
 
-    site_col = find_col(df, ALIASES["site"])
-    metric_col = find_col(df, ALIASES["ctr"]) or find_col(df, ALIASES["engagement"])
+        return result
 
-    if not site_col or not metric_col:
-        return {}
+    return {}
 
-    df = df[[site_col, metric_col]].copy()
-    df[metric_col] = df[metric_col].apply(safe_number)
-
-    df = df.dropna().sort_values(by=metric_col, ascending=False)
-
-    result = {}
-    for i in range(min(3, len(df))):
-        row = df.iloc[i]
-        result[f"TOP_TITLE_{i+1}_NAME"] = clean_text(row[site_col])
-        result[f"TOP_TITLE_{i+1}_CTR"] = safe_percent(row[metric_col])
-
-    return result
 
 # -------------------------
 # DATE
@@ -217,6 +197,7 @@ def extract_date(sheets):
                     return format_date(text)
 
     return None
+
 
 # -------------------------
 # VALIDATE
