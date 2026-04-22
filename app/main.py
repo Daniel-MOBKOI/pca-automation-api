@@ -8,7 +8,7 @@ import traceback
 import math
 import re
 
-app = FastAPI(title="PCA Automation API", version="8.3.3")
+app = FastAPI(title="PCA Automation API", version="8.3.4")
 
 BASE_DIR = Path("/tmp")
 
@@ -87,7 +87,7 @@ def find_header_row(df):
 
 
 # -------------------------
-# ALIASES (EXPANDED)
+# ALIASES
 # -------------------------
 ALIASES = {
     "campaign": ["campaign"],
@@ -96,7 +96,6 @@ ALIASES = {
     "engagement": ["engagement rate", "er"],
     "vcr": ["vcr", "video completion rate", "completion rate"],
     "spend": ["spend", "media spend"],
-    "site": ["site", "placement", "publisher", "domain"]
 }
 
 
@@ -142,9 +141,12 @@ def extract_data(sheets):
 
 
 # -------------------------
-# TOP TITLES
+# TOP TITLES (SMART DETECTION)
 # -------------------------
 def extract_top_titles(sheets):
+    best_df = None
+    best_score = -1
+
     for df in sheets.values():
         if df is None or df.empty:
             continue
@@ -155,26 +157,48 @@ def extract_top_titles(sheets):
         temp.columns = [clean_text(c) for c in temp.iloc[0]]
         temp = temp[1:].reset_index(drop=True)
 
-        site_col = find_col(temp, ALIASES["site"])
-        ctr_col = find_col(temp, ALIASES["ctr"])
+        cols = [normalize_header(c) for c in temp.columns]
 
-        if not site_col or not ctr_col:
-            continue
+        score = 0
 
-        temp = temp[[site_col, ctr_col]].copy()
-        temp[ctr_col] = temp[ctr_col].apply(safe_number)
+        if any(x in c for c in cols for x in ["site", "domain", "publisher", "environment", "property"]):
+            score += 3
 
-        temp = temp.dropna().sort_values(by=ctr_col, ascending=False)
+        if any("ctr" in c for c in cols):
+            score += 2
 
-        result = {}
-        for i in range(min(3, len(temp))):
-            row = temp.iloc[i]
-            result[f"TOP_TITLE_{i+1}_NAME"] = clean_text(row[site_col])
-            result[f"TOP_TITLE_{i+1}_CTR"] = safe_percent(row[ctr_col])
+        if score > best_score:
+            best_score = score
+            best_df = temp
 
-        return result
+    if best_df is None:
+        return {}
 
-    return {}
+    df = best_df
+
+    site_col = None
+    for col in df.columns:
+        if any(x in normalize_header(col) for x in ["site", "domain", "publisher", "environment", "property"]):
+            site_col = col
+            break
+
+    ctr_col = find_col(df, ALIASES["ctr"])
+
+    if not site_col or not ctr_col:
+        return {}
+
+    df = df[[site_col, ctr_col]].copy()
+    df[ctr_col] = df[ctr_col].apply(safe_number)
+
+    df = df.dropna().sort_values(by=ctr_col, ascending=False)
+
+    result = {}
+    for i in range(min(3, len(df))):
+        row = df.iloc[i]
+        result[f"TOP_TITLE_{i+1}_NAME"] = clean_text(row[site_col])
+        result[f"TOP_TITLE_{i+1}_CTR"] = safe_percent(row[ctr_col])
+
+    return result
 
 
 # -------------------------
@@ -195,7 +219,7 @@ def extract_date(sheets):
 
 
 # -------------------------
-# VALIDATE
+# VALIDATE ENDPOINT
 # -------------------------
 @app.post("/validate-eoc")
 async def validate_eoc(eoc_file: UploadFile = File(...)):
@@ -211,7 +235,16 @@ async def validate_eoc(eoc_file: UploadFile = File(...)):
         data["REPORT_DATE"] = extract_date(sheets)
         data.update(extract_top_titles(sheets))
 
-        return JSONResponse(content={"status": "validated", "mapped_values": data})
+        return JSONResponse(content={
+            "status": "validated",
+            "mapped_values": data
+        })
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e), "trace": traceback.format_exc()})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "trace": traceback.format_exc()
+            }
+        )
