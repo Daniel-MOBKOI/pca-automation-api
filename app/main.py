@@ -1,6 +1,7 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.openapi.utils import get_openapi
+from pydantic import BaseModel, Field
 import pandas as pd
 import shutil
 from pathlib import Path
@@ -9,10 +10,11 @@ import traceback
 import math
 import re
 import os
+import requests
 from typing import Any, Dict, List, Optional, Tuple
 from pptx import Presentation
 
-APP_VERSION = "10.1.1"
+APP_VERSION = "10.2.0"
 
 app = FastAPI(
     title="PCA Automation API",
@@ -21,7 +23,7 @@ app = FastAPI(
 )
 
 # -------------------------
-# CUSTOM OPENAPI (GPT-FRIENDLY FILE UPLOADS)
+# CUSTOM OPENAPI
 # -------------------------
 def custom_openapi():
     if app.openapi_schema:
@@ -31,23 +33,11 @@ def custom_openapi():
         title=app.title,
         version=app.version,
         routes=app.routes,
-        servers=[{"url": "https://pca-automation-api.onrender.com"}],
     )
 
-    components = openapi_schema.get("components", {}).get("schemas", {})
-
-    for schema_name in [
-        "Body_validate_eoc_validate_eoc_post",
-        "Body_generate_exec_summary_generate_exec_summary_post",
-    ]:
-        if schema_name in components:
-            props = components[schema_name].get("properties", {})
-            if "file" in props:
-                props["file"] = {
-                    "type": "string",
-                    "format": "binary",
-                    "title": "File"
-                }
+    openapi_schema["servers"] = [
+        {"url": "https://pca-automation-api.onrender.com"}
+    ]
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -63,6 +53,12 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 RULES_MASTER_PATH = Path(os.getenv("RULES_MASTER_PATH", "PCA_GPT_Rules_Master.xlsx"))
 TEMPLATE_PATH = Path(os.getenv("TEMPLATE_PATH", "templates/exec_summary_master.pptx"))
+
+# -------------------------
+# REQUEST MODELS
+# -------------------------
+class FileUrlRequest(BaseModel):
+    file_url: str = Field(..., description="Direct URL to the uploaded EOC Excel file")
 
 # -------------------------
 # HEALTH
@@ -214,6 +210,21 @@ def first_non_empty(series: pd.Series) -> Any:
 
 def is_blank_row(values: List[Any]) -> bool:
     return all(clean_text(v) == "" for v in values)
+
+def download_file_from_url(file_url: str, suffix: str = ".xlsx") -> Path:
+    path = BASE_DIR / f"eoc_{datetime.now().timestamp()}{suffix}"
+
+    headers = {
+        "User-Agent": "PCA-Automation-API/1.0"
+    }
+
+    response = requests.get(file_url, headers=headers, timeout=60)
+    response.raise_for_status()
+
+    with open(path, "wb") as f:
+        f.write(response.content)
+
+    return path
 
 # -------------------------
 # RULES MASTER LOADER (OPTIONAL)
@@ -844,15 +855,11 @@ def generate_ppt_from_template(template_path: Path, output_path: Path, data: dic
 # VALIDATE EOC
 # -------------------------
 @app.post("/validate-eoc")
-async def validate_eoc(file: UploadFile = File(...)):
+async def validate_eoc(payload: FileUrlRequest):
     try:
-        path = BASE_DIR / f"eoc_{datetime.now().timestamp()}.xlsx"
-
-        with open(path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-
+        path = download_file_from_url(payload.file_url, suffix=".xlsx")
         sheets = pd.read_excel(path, sheet_name=None, header=None)
-        result = build_mapped_values(sheets, filename=file.filename)
+        result = build_mapped_values(sheets, filename=Path(payload.file_url).name)
 
         return JSONResponse(content={
             "status": "validated",
@@ -874,7 +881,7 @@ async def validate_eoc(file: UploadFile = File(...)):
 # GENERATE EXEC SUMMARY
 # -------------------------
 @app.post("/generate-exec-summary")
-async def generate_exec_summary(file: UploadFile = File(...)):
+async def generate_exec_summary(payload: FileUrlRequest):
     try:
         if not TEMPLATE_PATH.exists():
             return JSONResponse(
@@ -885,13 +892,9 @@ async def generate_exec_summary(file: UploadFile = File(...)):
                 }
             )
 
-        eoc_path = BASE_DIR / f"eoc_{datetime.now().timestamp()}.xlsx"
-
-        with open(eoc_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-
+        eoc_path = download_file_from_url(payload.file_url, suffix=".xlsx")
         sheets = pd.read_excel(eoc_path, sheet_name=None, header=None)
-        result = build_mapped_values(sheets, filename=file.filename)
+        result = build_mapped_values(sheets, filename=Path(payload.file_url).name)
         mapped_data = result["mapped_values"]
 
         temp_output = OUTPUT_DIR / "temp_output.pptx"
