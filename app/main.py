@@ -1,151 +1,19 @@
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from fastapi.openapi.utils import get_openapi
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import JSONResponse, FileResponse
 import pandas as pd
+import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 import traceback
 import math
 import re
 import os
-import requests
-import base64
 from typing import Any, Dict, List, Optional, Tuple
 from pptx import Presentation
 
-APP_VERSION = "10.3.2"
+APP_VERSION = "10.0.4"
 
-app = FastAPI(
-    title="PCA Automation API",
-    version=APP_VERSION,
-    servers=[{"url": "https://pca-automation-api.onrender.com"}]
-)
-
-# -------------------------
-# CUSTOM OPENAPI FOR GPT ACTIONS
-# -------------------------
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-
-    openapi_schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        routes=app.routes,
-    )
-
-    openapi_schema["servers"] = [
-        {"url": "https://pca-automation-api.onrender.com"}
-    ]
-
-    components = openapi_schema.setdefault("components", {}).setdefault("schemas", {})
-
-    components["OpenAIFileRefsRequest"] = {
-        "type": "object",
-        "properties": {
-            "openaiFileIdRefs": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": (
-                    "Files uploaded by the user in ChatGPT. "
-                    "At runtime this is populated with JSON objects including "
-                    "name, id, mime_type, and download_link."
-                ),
-            },
-            "overrides": {
-                "type": "object",
-                "additionalProperties": True,
-                "description": "Optional placeholder overrides supplied by the user before generation."
-            }
-        },
-        "required": ["openaiFileIdRefs"],
-        "title": "OpenAIFileRefsRequest",
-    }
-
-    components["ValidateEocResponse"] = {
-        "type": "object",
-        "properties": {
-            "status": {"type": "string"},
-            "version": {"type": "string"},
-            "mapped_values": {
-                "type": "object",
-                "additionalProperties": True
-            },
-            "validation": {
-                "type": "object",
-                "additionalProperties": True
-            },
-            "diagnostics": {
-                "type": "object",
-                "additionalProperties": True
-            }
-        },
-        "required": ["status", "mapped_values"],
-        "title": "ValidateEocResponse",
-    }
-
-    components["OpenAIFileResponseItem"] = {
-        "type": "object",
-        "properties": {
-            "name": {
-                "type": "string",
-                "description": "The name of the file."
-            },
-            "mime_type": {
-                "type": "string",
-                "description": "The MIME type of the file."
-            },
-            "content": {
-                "type": "string",
-                "format": "byte",
-                "description": "The content of the file in base64 encoding."
-            }
-        },
-        "required": ["name", "mime_type", "content"],
-        "title": "OpenAIFileResponseItem",
-    }
-
-    components["GenerateExecSummaryResponse"] = {
-        "type": "object",
-        "properties": {
-            "status": {"type": "string"},
-            "version": {"type": "string"},
-            "mapped_values": {
-                "type": "object",
-                "additionalProperties": True
-            },
-            "openaiFileResponse": {
-                "type": "array",
-                "items": {
-                    "$ref": "#/components/schemas/OpenAIFileResponseItem"
-                }
-            }
-        },
-        "required": ["status", "openaiFileResponse"],
-        "title": "GenerateExecSummaryResponse",
-    }
-
-    # Request bodies
-    openapi_schema["paths"]["/validate-eoc"]["post"]["requestBody"]["content"]["application/json"]["schema"] = {
-        "$ref": "#/components/schemas/OpenAIFileRefsRequest"
-    }
-    openapi_schema["paths"]["/generate-exec-summary"]["post"]["requestBody"]["content"]["application/json"]["schema"] = {
-        "$ref": "#/components/schemas/OpenAIFileRefsRequest"
-    }
-
-    # Response bodies
-    openapi_schema["paths"]["/validate-eoc"]["post"]["responses"]["200"]["content"]["application/json"]["schema"] = {
-        "$ref": "#/components/schemas/ValidateEocResponse"
-    }
-    openapi_schema["paths"]["/generate-exec-summary"]["post"]["responses"]["200"]["content"]["application/json"]["schema"] = {
-        "$ref": "#/components/schemas/GenerateExecSummaryResponse"
-    }
-
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
-
-app.openapi = custom_openapi
+app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
 # -------------------------
 # CONFIG
@@ -155,21 +23,6 @@ OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 RULES_MASTER_PATH = Path(os.getenv("RULES_MASTER_PATH", "PCA_GPT_Rules_Master.xlsx"))
-TEMPLATE_PATH = Path(os.getenv("TEMPLATE_PATH", "templates/exec_summary_master.pptx"))
-
-# -------------------------
-# REQUEST MODEL
-# -------------------------
-class OpenAIFileRefsRequest(BaseModel):
-    openaiFileIdRefs: List[Any] = Field(
-        ...,
-        description=(
-            "Files uploaded by the user in ChatGPT. "
-            "At runtime this is populated with objects containing "
-            "name, id, mime_type, and download_link."
-        ),
-    )
-    overrides: Optional[Dict[str, Any]] = None
 
 # -------------------------
 # HEALTH
@@ -321,54 +174,6 @@ def first_non_empty(series: pd.Series) -> Any:
 
 def is_blank_row(values: List[Any]) -> bool:
     return all(clean_text(v) == "" for v in values)
-
-# -------------------------
-# OPENAI FILE REF HELPERS
-# -------------------------
-def get_first_openai_file_ref(openaiFileIdRefs: List[Any]) -> Dict[str, Any]:
-    if not openaiFileIdRefs:
-        raise ValueError("No uploaded files were provided.")
-
-    ref = openaiFileIdRefs[0]
-
-    if not isinstance(ref, dict):
-        raise ValueError(
-            "Expected openaiFileIdRefs runtime objects. "
-            "Make sure the GPT Action is configured to use openaiFileIdRefs."
-        )
-
-    if "download_link" not in ref:
-        raise ValueError("Uploaded file reference did not include a download_link.")
-
-    return ref
-
-def download_file_from_openai_ref(file_ref: Dict[str, Any], suffix: str = ".xlsx") -> Tuple[Path, str]:
-    file_name = file_ref.get("name") or f"uploaded{suffix}"
-    download_link = file_ref["download_link"]
-
-    path = BASE_DIR / f"eoc_{datetime.now().timestamp()}{suffix}"
-
-    headers = {
-        "User-Agent": "PCA-Automation-API/1.0"
-    }
-
-    print(f"[download] file_name={file_name}")
-    print(f"[download] download_link={download_link}")
-
-    response = requests.get(download_link, headers=headers, timeout=60, allow_redirects=True)
-
-    print(f"[download] status_code={response.status_code}")
-    print(f"[download] content_type={response.headers.get('Content-Type')}")
-    print(f"[download] final_url={response.url}")
-
-    response.raise_for_status()
-
-    with open(path, "wb") as f:
-        f.write(response.content)
-
-    print(f"[download] saved_to={path} bytes={len(response.content)}")
-
-    return path, file_name
 
 # -------------------------
 # RULES MASTER LOADER (OPTIONAL)
@@ -995,27 +800,19 @@ def generate_ppt_from_template(template_path: Path, output_path: Path, data: dic
             replace_in_shape(shape, data)
     prs.save(output_path)
 
-def build_openai_file_response(file_path: Path, output_name: str, mime_type: str) -> Dict[str, Any]:
-    with open(file_path, "rb") as f:
-        encoded = base64.b64encode(f.read()).decode("utf-8")
-
-    return {
-        "name": output_name,
-        "mime_type": mime_type,
-        "content": encoded,
-    }
-
 # -------------------------
 # VALIDATE EOC
 # -------------------------
 @app.post("/validate-eoc")
-async def validate_eoc(payload: OpenAIFileRefsRequest):
+async def validate_eoc(eoc_file: UploadFile = File(...)):
     try:
-        file_ref = get_first_openai_file_ref(payload.openaiFileIdRefs)
-        path, original_name = download_file_from_openai_ref(file_ref, suffix=".xlsx")
+        path = BASE_DIR / f"eoc_{datetime.now().timestamp()}.xlsx"
+
+        with open(path, "wb") as f:
+            shutil.copyfileobj(eoc_file.file, f)
 
         sheets = pd.read_excel(path, sheet_name=None, header=None)
-        result = build_mapped_values(sheets, filename=original_name)
+        result = build_mapped_values(sheets, filename=eoc_file.filename)
 
         return JSONResponse(content={
             "status": "validated",
@@ -1037,55 +834,43 @@ async def validate_eoc(payload: OpenAIFileRefsRequest):
 # GENERATE EXEC SUMMARY
 # -------------------------
 @app.post("/generate-exec-summary")
-async def generate_exec_summary(payload: OpenAIFileRefsRequest):
+async def generate_exec_summary(
+    eoc_file: UploadFile = File(...),
+    template_file: UploadFile = File(...)
+):
     try:
-        if not TEMPLATE_PATH.exists():
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "error": f"Locked PPT template not found at {TEMPLATE_PATH}",
-                    "version": APP_VERSION
-                }
-            )
+        eoc_path = BASE_DIR / f"eoc_{datetime.now().timestamp()}.xlsx"
+        template_path = BASE_DIR / f"template_{datetime.now().timestamp()}.pptx"
 
-        file_ref = get_first_openai_file_ref(payload.openaiFileIdRefs)
-        eoc_path, original_name = download_file_from_openai_ref(file_ref, suffix=".xlsx")
+        with open(eoc_path, "wb") as f:
+            shutil.copyfileobj(eoc_file.file, f)
+
+        with open(template_path, "wb") as f:
+            shutil.copyfileobj(template_file.file, f)
 
         sheets = pd.read_excel(eoc_path, sheet_name=None, header=None)
-        result = build_mapped_values(sheets, filename=original_name)
+        result = build_mapped_values(sheets, filename=eoc_file.filename)
         mapped_data = result["mapped_values"]
-
-        # Apply user overrides if provided
-        if payload.overrides:
-            for key, value in payload.overrides.items():
-                mapped_data[key] = value
 
         temp_output = OUTPUT_DIR / "temp_output.pptx"
         generate_ppt_from_template(
-            template_path=TEMPLATE_PATH,
+            template_path=template_path,
             output_path=temp_output,
             data=mapped_data
         )
 
         campaign_name = mapped_data.get("CAMPAIGN_NAME", "Campaign")
-        safe_campaign = re.sub(r'[\\/*?:"<>|]', "", str(campaign_name))
-        output_filename = f"Exec Summary_PCA One Pager_{safe_campaign}.pptx"
+        safe_campaign = re.sub(r'[\\/*?:"<>|]', "", campaign_name)
+        filename = f"Exec Summary_PCA One Pager_{safe_campaign}.pptx"
 
-        final = OUTPUT_DIR / output_filename
-        temp_output.replace(final)
+        final = OUTPUT_DIR / filename
+        shutil.copy2(temp_output, final)
 
-        openai_file = build_openai_file_response(
-            file_path=final,
-            output_name=output_filename,
-            mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        return FileResponse(
+            path=str(final),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            filename=final.name,
         )
-
-        return JSONResponse(content={
-            "status": "generated",
-            "version": APP_VERSION,
-            "mapped_values": mapped_data,
-            "openaiFileResponse": [openai_file],
-        })
 
     except Exception as e:
         return JSONResponse(
