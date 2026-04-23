@@ -11,7 +11,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 from pptx import Presentation
 
-APP_VERSION = "10.0.4"
+APP_VERSION = "10.1.0"
 
 app = FastAPI(
     title="PCA Automation API",
@@ -27,6 +27,7 @@ OUTPUT_DIR = BASE_DIR / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 RULES_MASTER_PATH = Path(os.getenv("RULES_MASTER_PATH", "PCA_GPT_Rules_Master.xlsx"))
+TEMPLATE_PATH = Path(os.getenv("TEMPLATE_PATH", "templates/exec_summary_master.pptx"))
 
 # -------------------------
 # HEALTH
@@ -808,15 +809,15 @@ def generate_ppt_from_template(template_path: Path, output_path: Path, data: dic
 # VALIDATE EOC
 # -------------------------
 @app.post("/validate-eoc")
-async def validate_eoc(eoc_file: UploadFile = File(...)):
+async def validate_eoc(file: UploadFile = File(...)):
     try:
         path = BASE_DIR / f"eoc_{datetime.now().timestamp()}.xlsx"
 
         with open(path, "wb") as f:
-            shutil.copyfileobj(eoc_file.file, f)
+            shutil.copyfileobj(file.file, f)
 
         sheets = pd.read_excel(path, sheet_name=None, header=None)
-        result = build_mapped_values(sheets, filename=eoc_file.filename)
+        result = build_mapped_values(sheets, filename=file.filename)
 
         return JSONResponse(content={
             "status": "validated",
@@ -838,36 +839,38 @@ async def validate_eoc(eoc_file: UploadFile = File(...)):
 # GENERATE EXEC SUMMARY
 # -------------------------
 @app.post("/generate-exec-summary")
-async def generate_exec_summary(
-    eoc_file: UploadFile = File(...),
-    template_file: UploadFile = File(...)
-):
+async def generate_exec_summary(file: UploadFile = File(...)):
     try:
+        if not TEMPLATE_PATH.exists():
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": f"Locked PPT template not found at {TEMPLATE_PATH}",
+                    "version": APP_VERSION
+                }
+            )
+
         eoc_path = BASE_DIR / f"eoc_{datetime.now().timestamp()}.xlsx"
-        template_path = BASE_DIR / f"template_{datetime.now().timestamp()}.pptx"
 
         with open(eoc_path, "wb") as f:
-            shutil.copyfileobj(eoc_file.file, f)
-
-        with open(template_path, "wb") as f:
-            shutil.copyfileobj(template_file.file, f)
+            shutil.copyfileobj(file.file, f)
 
         sheets = pd.read_excel(eoc_path, sheet_name=None, header=None)
-        result = build_mapped_values(sheets, filename=eoc_file.filename)
+        result = build_mapped_values(sheets, filename=file.filename)
         mapped_data = result["mapped_values"]
 
         temp_output = OUTPUT_DIR / "temp_output.pptx"
         generate_ppt_from_template(
-            template_path=template_path,
+            template_path=TEMPLATE_PATH,
             output_path=temp_output,
             data=mapped_data
         )
 
         campaign_name = mapped_data.get("CAMPAIGN_NAME", "Campaign")
         safe_campaign = re.sub(r'[\\/*?:"<>|]', "", campaign_name)
-        filename = f"Exec Summary_PCA One Pager_{safe_campaign}.pptx"
+        output_filename = f"Exec Summary_PCA One Pager_{safe_campaign}.pptx"
 
-        final = OUTPUT_DIR / filename
+        final = OUTPUT_DIR / output_filename
         shutil.copy2(temp_output, final)
 
         return FileResponse(
