@@ -218,11 +218,20 @@ def download_file_from_url(file_url: str, suffix: str = ".xlsx") -> Path:
         "User-Agent": "PCA-Automation-API/1.0"
     }
 
-    response = requests.get(file_url, headers=headers, timeout=60)
+    print(f"[download] file_url={file_url}")
+
+    response = requests.get(file_url, headers=headers, timeout=60, allow_redirects=True)
+
+    print(f"[download] status_code={response.status_code}")
+    print(f"[download] content_type={response.headers.get('Content-Type')}")
+    print(f"[download] final_url={response.url}")
+
     response.raise_for_status()
 
     with open(path, "wb") as f:
         f.write(response.content)
+
+    print(f"[download] saved_to={path} bytes={len(response.content)}")
 
     return path
 
