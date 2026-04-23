@@ -40,6 +40,7 @@ def custom_openapi():
     ]
 
     components = openapi_schema.setdefault("components", {}).setdefault("schemas", {})
+
     components["OpenAIFileRefsRequest"] = {
         "type": "object",
         "properties": {
@@ -62,13 +63,84 @@ def custom_openapi():
         "title": "OpenAIFileRefsRequest",
     }
 
-    for path_name in ["/validate-eoc", "/generate-exec-summary"]:
-        try:
-            openapi_schema["paths"][path_name]["post"]["requestBody"]["content"]["application/json"]["schema"] = {
-                "$ref": "#/components/schemas/OpenAIFileRefsRequest"
+    components["ValidateEocResponse"] = {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string"},
+            "version": {"type": "string"},
+            "mapped_values": {
+                "type": "object",
+                "additionalProperties": True
+            },
+            "validation": {
+                "type": "object",
+                "additionalProperties": True
+            },
+            "diagnostics": {
+                "type": "object",
+                "additionalProperties": True
             }
-        except Exception:
-            pass
+        },
+        "required": ["status", "mapped_values"],
+        "title": "ValidateEocResponse",
+    }
+
+    components["OpenAIFileResponseItem"] = {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "The name of the file."
+            },
+            "mime_type": {
+                "type": "string",
+                "description": "The MIME type of the file."
+            },
+            "content": {
+                "type": "string",
+                "format": "byte",
+                "description": "The content of the file in base64 encoding."
+            }
+        },
+        "required": ["name", "mime_type", "content"],
+        "title": "OpenAIFileResponseItem",
+    }
+
+    components["GenerateExecSummaryResponse"] = {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string"},
+            "version": {"type": "string"},
+            "mapped_values": {
+                "type": "object",
+                "additionalProperties": True
+            },
+            "openaiFileResponse": {
+                "type": "array",
+                "items": {
+                    "$ref": "#/components/schemas/OpenAIFileResponseItem"
+                }
+            }
+        },
+        "required": ["status", "openaiFileResponse"],
+        "title": "GenerateExecSummaryResponse",
+    }
+
+    # Request bodies
+    openapi_schema["paths"]["/validate-eoc"]["post"]["requestBody"]["content"]["application/json"]["schema"] = {
+        "$ref": "#/components/schemas/OpenAIFileRefsRequest"
+    }
+    openapi_schema["paths"]["/generate-exec-summary"]["post"]["requestBody"]["content"]["application/json"]["schema"] = {
+        "$ref": "#/components/schemas/OpenAIFileRefsRequest"
+    }
+
+    # Response bodies
+    openapi_schema["paths"]["/validate-eoc"]["post"]["responses"]["200"]["content"]["application/json"]["schema"] = {
+        "$ref": "#/components/schemas/ValidateEocResponse"
+    }
+    openapi_schema["paths"]["/generate-exec-summary"]["post"]["responses"]["200"]["content"]["application/json"]["schema"] = {
+        "$ref": "#/components/schemas/GenerateExecSummaryResponse"
+    }
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
