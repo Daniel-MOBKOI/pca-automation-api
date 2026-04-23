@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse, FileResponse
+from fastapi.openapi.utils import get_openapi
 import pandas as pd
 import shutil
 from pathlib import Path
@@ -11,13 +12,47 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 from pptx import Presentation
 
-APP_VERSION = "10.1.0"
+APP_VERSION = "10.1.1"
 
 app = FastAPI(
     title="PCA Automation API",
     version=APP_VERSION,
     servers=[{"url": "https://pca-automation-api.onrender.com"}]
 )
+
+# -------------------------
+# CUSTOM OPENAPI (GPT-FRIENDLY FILE UPLOADS)
+# -------------------------
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+        servers=[{"url": "https://pca-automation-api.onrender.com"}],
+    )
+
+    components = openapi_schema.get("components", {}).get("schemas", {})
+
+    for schema_name in [
+        "Body_validate_eoc_validate_eoc_post",
+        "Body_generate_exec_summary_generate_exec_summary_post",
+    ]:
+        if schema_name in components:
+            props = components[schema_name].get("properties", {})
+            if "file" in props:
+                props["file"] = {
+                    "type": "string",
+                    "format": "binary",
+                    "title": "File"
+                }
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 # -------------------------
 # CONFIG
