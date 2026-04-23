@@ -14,7 +14,7 @@ import base64
 from typing import Any, Dict, List, Optional, Tuple
 from pptx import Presentation
 
-APP_VERSION = "10.3.1"
+APP_VERSION = "10.3.2"
 
 app = FastAPI(
     title="PCA Automation API",
@@ -39,7 +39,6 @@ def custom_openapi():
         {"url": "https://pca-automation-api.onrender.com"}
     ]
 
-    # Force GPT-friendly schema for file refs
     components = openapi_schema.setdefault("components", {}).setdefault("schemas", {})
     components["OpenAIFileRefsRequest"] = {
         "type": "object",
@@ -52,13 +51,17 @@ def custom_openapi():
                     "At runtime this is populated with JSON objects including "
                     "name, id, mime_type, and download_link."
                 ),
+            },
+            "overrides": {
+                "type": "object",
+                "additionalProperties": True,
+                "description": "Optional placeholder overrides supplied by the user before generation."
             }
         },
         "required": ["openaiFileIdRefs"],
         "title": "OpenAIFileRefsRequest",
     }
 
-    # Point request bodies to the forced schema
     for path_name in ["/validate-eoc", "/generate-exec-summary"]:
         try:
             openapi_schema["paths"][path_name]["post"]["requestBody"]["content"]["application/json"]["schema"] = {
@@ -94,6 +97,7 @@ class OpenAIFileRefsRequest(BaseModel):
             "name, id, mime_type, and download_link."
         ),
     )
+    overrides: Optional[Dict[str, Any]] = None
 
 # -------------------------
 # HEALTH
@@ -979,6 +983,11 @@ async def generate_exec_summary(payload: OpenAIFileRefsRequest):
         result = build_mapped_values(sheets, filename=original_name)
         mapped_data = result["mapped_values"]
 
+        # Apply user overrides if provided
+        if payload.overrides:
+            for key, value in payload.overrides.items():
+                mapped_data[key] = value
+
         temp_output = OUTPUT_DIR / "temp_output.pptx"
         generate_ppt_from_template(
             template_path=TEMPLATE_PATH,
@@ -987,7 +996,7 @@ async def generate_exec_summary(payload: OpenAIFileRefsRequest):
         )
 
         campaign_name = mapped_data.get("CAMPAIGN_NAME", "Campaign")
-        safe_campaign = re.sub(r'[\\/*?:"<>|]', "", campaign_name)
+        safe_campaign = re.sub(r'[\\/*?:"<>|]', "", str(campaign_name))
         output_filename = f"Exec Summary_PCA One Pager_{safe_campaign}.pptx"
 
         final = OUTPUT_DIR / output_filename
