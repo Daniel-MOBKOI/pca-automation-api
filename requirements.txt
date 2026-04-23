@@ -1,7 +1,6 @@
 fastapi
-uvicorn[standard]
-python-multipart
+uvicorn
 pandas
 openpyxl
+python-multipart
 python-pptx
-requests
