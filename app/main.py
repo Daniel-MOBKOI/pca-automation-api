@@ -16,26 +16,15 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.0.7-hybrid-actions"
+APP_VERSION = "10.0.8-hybrid-actions"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
 
-TEMPLATE_PATH = Path(
-    os.getenv(
-        "TEMPLATE_PATH",
-        ROOT_DIR / "templates" / "exec_summary_master.pptx",
-    )
-)
-
-RULES_MASTER_PATH = Path(
-    os.getenv(
-        "RULES_MASTER_PATH",
-        ROOT_DIR / "assets" / "PCA_GPT_Rules_Master.xlsx",
-    )
-)
+TEMPLATE_PATH = Path(os.getenv("TEMPLATE_PATH", ROOT_DIR / "templates" / "exec_summary_master.pptx"))
+RULES_MASTER_PATH = Path(os.getenv("RULES_MASTER_PATH", ROOT_DIR / "assets" / "PCA_GPT_Rules_Master.xlsx"))
 
 PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 MAX_RETURN_FILE_BYTES = 10 * 1024 * 1024
@@ -73,6 +62,14 @@ def clean_text(value: Any) -> str:
     except Exception:
         pass
     return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def clean_dimension_label(value: Any) -> str:
+    value = clean_text(value)
+    value = re.sub(r"\bMISCRL\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+-\s+-\s+", " - ", value)
+    value = re.sub(r"\s{2,}", " ", value)
+    return value.strip(" -")
 
 
 def normalize_text(value: Any) -> str:
@@ -233,45 +230,21 @@ def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
 ALIASES = {
     "campaign": ["campaign", "campaign name"],
     "client_brand": ["client", "brand", "advertiser", "brand / client"],
-
     "impressions": ["impressions", "delivered impressions", "served impressions"],
     "ctr": ["ctr", "click through rate", "click-through rate"],
     "engagement_rate": ["engagement rate", "engagement %", "er", "total er", "overall er"],
     "vcr": ["video completion rate", "vcr", "completed view rate", "video % complete"],
-
-    "on_screen": [
-        "mobkoi on screen", "on screen", "on-screen",
-        "mrc viewability", "viewability", "viewable rate"
-    ],
+    "on_screen": ["mobkoi on screen", "on screen", "on-screen", "mrc viewability", "viewability", "viewable rate"],
     "mobkoi_on_screen": ["mobkoi on screen"],
     "mrc_viewability": ["mrc viewability"],
-
     "spend": ["actual spend", "spend", "total spend", "media spend"],
     "sold_paid_units": ["sold paid units"],
     "delivered_overall_av_units": ["delivered overall av units", "delivered overall av (units)"],
     "delivery_incl_av": ["delivery percentage incl av", "delivery percentage (incl av)"],
-    "delivered_av_amount": [
-        "delivered av amount currency",
-        "delivered av amount (currency)",
-        "worth of added value"
-    ],
-
-    "site": [
-        "site", "publisher", "domain", "environment", "property",
-        "placement", "title", "inventory", "app", "website"
-    ],
-
-    "geo": [
-        "geo", "market", "markets", "country", "countries",
-        "region", "territory"
-    ],
-
-    "format": [
-        "format", "formats", "creative", "creative format",
-        "ad format", "unit type", "product", "product type",
-        "placement type"
-    ],
-
+    "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)", "worth of added value"],
+    "site": ["site", "publisher", "domain", "environment", "property", "placement", "title", "inventory", "app", "website"],
+    "geo": ["geo", "market", "markets", "country", "countries", "region", "territory"],
+    "format": ["format", "formats", "creative", "creative format", "ad format", "unit type", "product", "product type", "placement type"],
     "date": ["date", "report date", "served date", "live date"],
 }
 
@@ -467,15 +440,12 @@ def table_quality_score(df: pd.DataFrame, table_type: str) -> int:
     if df is None or df.empty:
         return -999
 
-    score = 0
-    score += min(len(df.columns), 20)
-    score += min(len(df), 10)
+    score = min(len(df.columns), 20) + min(len(df), 10)
 
     if table_type == "campaign_kpi_summary":
         for key in ["campaign", "impressions", "ctr", "engagement_rate", "vcr", "spend"]:
             if find_col(df, key):
                 score += 10
-
         if find_col(df, "mobkoi_on_screen"):
             score += 12
         elif find_col(df, "mrc_viewability"):
@@ -522,9 +492,7 @@ def detect_tables(sheets: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
         if raw_df is None or raw_df.empty:
             continue
 
-        header_rows = find_candidate_header_rows(raw_df)
-
-        for header_row in header_rows:
+        for header_row in find_candidate_header_rows(raw_df):
             block = build_block_from_header(raw_df, header_row)
             if block.empty:
                 continue
@@ -537,7 +505,6 @@ def detect_tables(sheets: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
             candidates_by_type[table_type].append((score, block))
 
     detected: Dict[str, pd.DataFrame] = {}
-
     for table_type, candidates in candidates_by_type.items():
         if candidates:
             candidates.sort(key=lambda x: x[0], reverse=True)
@@ -553,9 +520,7 @@ def scan_workbook_texts(sheets: Dict[str, pd.DataFrame]) -> List[str]:
         if df is None or df.empty:
             continue
 
-        preview = df.head(20)
-
-        for row in preview.values:
+        for row in df.head(20).values:
             for cell in row:
                 text = clean_text(cell)
                 if text:
@@ -594,8 +559,7 @@ def extract_dates(
     if match:
         end_dt = parse_date_from_any(match.group(1))
         if end_dt:
-            start_dt = end_dt - timedelta(days=6)
-            return start_dt, end_dt
+            return end_dt - timedelta(days=6), end_dt
 
     return None, None
 
@@ -642,7 +606,6 @@ def extract_client_name(
             for sep in [" - ", " | ", "_"]:
                 if sep in campaign_val:
                     return clean_text(campaign_val.split(sep)[0])
-
             words = campaign_val.split()
             if words:
                 return words[0]
@@ -664,7 +627,7 @@ def join_dimension_values(df: pd.DataFrame, dim_key: str) -> Optional[str]:
     if isinstance(col_data, pd.DataFrame):
         col_data = col_data.iloc[:, 0]
 
-    raw_vals = [clean_text(v) for v in col_data.tolist() if clean_text(v)]
+    raw_vals = [clean_dimension_label(v) for v in col_data.tolist() if clean_dimension_label(v)]
 
     if not raw_vals:
         return None
@@ -688,7 +651,7 @@ def join_dimension_values(df: pd.DataFrame, dim_key: str) -> Optional[str]:
             else:
                 suffix = [val]
 
-        candidate = " - ".join([p for p in suffix if p])
+        candidate = clean_dimension_label(" - ".join([p for p in suffix if p]))
         if candidate:
             cleaned.append(candidate)
 
@@ -718,23 +681,16 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
     if isinstance(metric_data, pd.DataFrame):
         metric_data = metric_data.iloc[:, 0]
 
-    temp = pd.DataFrame({
-        "site": site_data,
-        "metric": metric_data,
-    })
-
+    temp = pd.DataFrame({"site": site_data, "metric": metric_data})
     temp["metric"] = temp["metric"].apply(safe_number)
     temp = temp.dropna(subset=["metric"])
 
-    temp = temp[
-        temp["site"].apply(
-            lambda x: clean_text(x).lower()
-            not in [
-                "site", "publisher", "domain", "environment", "property",
-                "placement", "title", "inventory", "app", "website"
-            ]
-        )
+    blocked = [
+        "site", "publisher", "domain", "environment", "property",
+        "placement", "title", "inventory", "app", "website"
     ]
+
+    temp = temp[temp["site"].apply(lambda x: clean_text(x).lower() not in blocked)]
 
     if temp.empty:
         return {}
@@ -769,7 +725,6 @@ def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
     missing_required = [k for k in required_core if not mapped.get(k)]
 
     warnings = []
-
     if not mapped.get("CLIENT_NAME"):
         warnings.append("CLIENT_NAME missing")
     if not mapped.get("CAMPAIGN_MARKETS"):
@@ -792,8 +747,6 @@ def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
 
 def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> Dict[str, Any]:
     rules = load_rules_master()
-    rules_available = rules is not None
-
     detected = detect_tables(sheets)
 
     kpi_df = detected.get("campaign_kpi_summary")
@@ -815,30 +768,17 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped["PERFORMANCE_VCR"] = format_percent(extract_kpi_value(kpi_df, "vcr"))
 
         on_screen_val = None
-        mobkoi_col = find_col(kpi_df, "mobkoi_on_screen")
-        mrc_col = find_col(kpi_df, "mrc_viewability")
-        generic_col = find_col(kpi_df, "on_screen")
-
-        if mobkoi_col:
-            col_data = kpi_df[mobkoi_col]
-            if isinstance(col_data, pd.DataFrame):
-                col_data = col_data.iloc[:, 0]
-            on_screen_val = first_non_empty(col_data)
-        elif mrc_col:
-            col_data = kpi_df[mrc_col]
-            if isinstance(col_data, pd.DataFrame):
-                col_data = col_data.iloc[:, 0]
-            on_screen_val = first_non_empty(col_data)
-        elif generic_col:
-            col_data = kpi_df[generic_col]
-            if isinstance(col_data, pd.DataFrame):
-                col_data = col_data.iloc[:, 0]
-            on_screen_val = first_non_empty(col_data)
+        for key in ["mobkoi_on_screen", "mrc_viewability", "on_screen"]:
+            col = find_col(kpi_df, key)
+            if col:
+                col_data = kpi_df[col]
+                if isinstance(col_data, pd.DataFrame):
+                    col_data = col_data.iloc[:, 0]
+                on_screen_val = first_non_empty(col_data)
+                break
 
         mapped["PERFORMANCE_ON_SCREEN"] = format_percent(on_screen_val)
-
-        spend_val = extract_kpi_value(kpi_df, "spend")
-        mapped["CAMPAIGN_BUDGET"] = format_currency(safe_number(spend_val))
+        mapped["CAMPAIGN_BUDGET"] = format_currency(safe_number(extract_kpi_value(kpi_df, "spend")))
     else:
         mapped["CAMPAIGN_NAME"] = None
         mapped["DELIVERED_IMPRESSIONS"] = None
@@ -887,7 +827,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
     diagnostics = {
         "detected_tables": list(detected.keys()),
         "table_columns": {k: [str(c) for c in v.columns] for k, v in detected.items()},
-        "rules_master_loaded": rules_available,
+        "rules_master_loaded": rules is not None,
         "version": APP_VERSION,
     }
 
@@ -926,8 +866,7 @@ def replace_text(text: str, data: dict) -> str:
         return text
 
     for key, value in data.items():
-        placeholder = f"{{{{{key}}}}}"
-        text = text.replace(placeholder, "" if value is None else str(value))
+        text = text.replace(f"{{{{{key}}}}}", "" if value is None else str(value))
 
     return text
 
@@ -952,10 +891,7 @@ def replace_in_shape(shape, data: dict):
 
 def generate_ppt_from_template(template_path: Path, output_path: Path, data: dict):
     if not template_path.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"Template not found at {template_path}",
-        )
+        raise HTTPException(status_code=500, detail=f"Template not found at {template_path}")
 
     prs = Presentation(template_path)
 
@@ -1021,17 +957,10 @@ async def generate_exec_summary(payload: FileRefsPayload):
             filename = f"Exec Summary_PCA One Pager_{campaign_name}.pptx"
             output_path = tmp_dir / filename
 
-            generate_ppt_from_template(
-                template_path=TEMPLATE_PATH,
-                output_path=output_path,
-                data=mapped_data,
-            )
+            generate_ppt_from_template(TEMPLATE_PATH, output_path, mapped_data)
 
             if output_path.stat().st_size > MAX_RETURN_FILE_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail="Generated PPT is over 10MB. Reduce template media size.",
-                )
+                raise HTTPException(status_code=413, detail="Generated PPT is over 10MB. Reduce template media size.")
 
             encoded = base64.b64encode(output_path.read_bytes()).decode("utf-8")
 
