@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.0.6-hybrid-actions"
+APP_VERSION = "10.0.7-hybrid-actions"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
@@ -233,21 +233,45 @@ def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
 ALIASES = {
     "campaign": ["campaign", "campaign name"],
     "client_brand": ["client", "brand", "advertiser", "brand / client"],
+
     "impressions": ["impressions", "delivered impressions", "served impressions"],
     "ctr": ["ctr", "click through rate", "click-through rate"],
     "engagement_rate": ["engagement rate", "engagement %", "er", "total er", "overall er"],
     "vcr": ["video completion rate", "vcr", "completed view rate", "video % complete"],
-    "on_screen": ["mobkoi on screen", "on screen", "on-screen", "mrc viewability", "viewability", "viewable rate"],
+
+    "on_screen": [
+        "mobkoi on screen", "on screen", "on-screen",
+        "mrc viewability", "viewability", "viewable rate"
+    ],
     "mobkoi_on_screen": ["mobkoi on screen"],
     "mrc_viewability": ["mrc viewability"],
+
     "spend": ["actual spend", "spend", "total spend", "media spend"],
     "sold_paid_units": ["sold paid units"],
     "delivered_overall_av_units": ["delivered overall av units", "delivered overall av (units)"],
     "delivery_incl_av": ["delivery percentage incl av", "delivery percentage (incl av)"],
-    "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)", "worth of added value"],
-    "site": ["site", "publisher", "domain", "environment", "property", "placement"],
-    "geo": ["geo", "market", "country", "region"],
-    "format": ["format", "creative", "creative format", "ad format", "unit type"],
+    "delivered_av_amount": [
+        "delivered av amount currency",
+        "delivered av amount (currency)",
+        "worth of added value"
+    ],
+
+    "site": [
+        "site", "publisher", "domain", "environment", "property",
+        "placement", "title", "inventory", "app", "website"
+    ],
+
+    "geo": [
+        "geo", "market", "markets", "country", "countries",
+        "region", "territory"
+    ],
+
+    "format": [
+        "format", "formats", "creative", "creative format",
+        "ad format", "unit type", "product", "product type",
+        "placement type"
+    ],
+
     "date": ["date", "report date", "served date", "live date"],
 }
 
@@ -286,7 +310,10 @@ def score_header_row(row_values: List[Any]) -> int:
     keywords = [
         "campaign", "impressions", "ctr", "engagement", "vcr", "completion",
         "spend", "site", "publisher", "domain", "environment", "property",
-        "geo", "market", "country", "region", "format", "creative", "date",
+        "placement", "title", "inventory", "app", "website",
+        "geo", "market", "markets", "country", "countries", "region", "territory",
+        "format", "formats", "creative", "product", "unit type",
+        "date", "report date", "served date", "live date",
         "sold paid units", "delivered overall av", "delivery percentage", "mrc viewability",
     ]
 
@@ -373,6 +400,15 @@ def classify_table(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "unknown"
 
+    site_col = find_col(df, "site")
+    geo_col = find_col(df, "geo")
+    format_col = find_col(df, "format")
+
+    has_ctr = find_col(df, "ctr") is not None
+    has_er = find_col(df, "engagement_rate") is not None
+    has_vcr = find_col(df, "vcr") is not None
+    has_impressions = find_col(df, "impressions") is not None
+
     delivery_hits = sum([
         1 if find_col(df, "sold_paid_units") else 0,
         1 if find_col(df, "delivered_overall_av_units") else 0,
@@ -383,26 +419,13 @@ def classify_table(df: pd.DataFrame) -> str:
     if delivery_hits >= 2:
         return "campaign_delivery"
 
-    kpi_hits = sum([
-        1 if find_col(df, "campaign") else 0,
-        1 if find_col(df, "impressions") else 0,
-        1 if find_col(df, "ctr") else 0,
-        1 if find_col(df, "engagement_rate") else 0,
-        1 if find_col(df, "vcr") else 0,
-        1 if (find_col(df, "mobkoi_on_screen") or find_col(df, "mrc_viewability") or find_col(df, "on_screen")) else 0,
-        1 if find_col(df, "spend") else 0,
-    ])
-
-    if kpi_hits >= 3:
-        return "campaign_kpi_summary"
-
-    if find_col(df, "site"):
+    if site_col and (has_ctr or has_er or has_vcr):
         return "site"
 
-    if find_col(df, "geo"):
+    if geo_col and has_impressions:
         return "geo"
 
-    if find_col(df, "format"):
+    if format_col and has_impressions:
         return "format"
 
     date_col = find_col(df, "date")
@@ -414,6 +437,28 @@ def classify_table(df: pd.DataFrame) -> str:
         sample = [parse_date_from_any(v) for v in col_data.head(10).values]
         if any(v is not None for v in sample):
             return "date"
+
+    kpi_hits = sum([
+        1 if find_col(df, "campaign") else 0,
+        1 if has_impressions else 0,
+        1 if has_ctr else 0,
+        1 if has_er else 0,
+        1 if has_vcr else 0,
+        1 if (find_col(df, "mobkoi_on_screen") or find_col(df, "mrc_viewability") or find_col(df, "on_screen")) else 0,
+        1 if find_col(df, "spend") else 0,
+    ])
+
+    if kpi_hits >= 3:
+        return "campaign_kpi_summary"
+
+    if site_col:
+        return "site"
+
+    if geo_col:
+        return "geo"
+
+    if format_col:
+        return "format"
 
     return "unknown"
 
@@ -684,7 +729,10 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
     temp = temp[
         temp["site"].apply(
             lambda x: clean_text(x).lower()
-            not in ["site", "publisher", "domain", "environment", "property", "placement"]
+            not in [
+                "site", "publisher", "domain", "environment", "property",
+                "placement", "title", "inventory", "app", "website"
+            ]
         )
     ]
 
