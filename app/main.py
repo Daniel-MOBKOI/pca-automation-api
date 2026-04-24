@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_PATH = Path(
     os.getenv(
         "TEMPLATE_PATH",
-        BASE_DIR / "templates" / "exec_summary_master.pptx",
+        BASE_DIR.parent / "templates" / "exec_summary_master.pptx"
     )
 )
 
