@@ -1,8 +1,10 @@
 import base64
+import math
 import os
 import re
 import tempfile
-from datetime import datetime
+import traceback
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,30 +16,30 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.0.5-hybrid-production"
+APP_VERSION = "10.0.6-hybrid-actions"
+
+app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
 BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent
+
 TEMPLATE_PATH = Path(
     os.getenv(
         "TEMPLATE_PATH",
-        BASE_DIR.parent / "templates" / "exec_summary_master.pptx"
+        ROOT_DIR / "templates" / "exec_summary_master.pptx",
+    )
+)
+
+RULES_MASTER_PATH = Path(
+    os.getenv(
+        "RULES_MASTER_PATH",
+        ROOT_DIR / "assets" / "PCA_GPT_Rules_Master.xlsx",
     )
 )
 
 PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 MAX_RETURN_FILE_BYTES = 10 * 1024 * 1024
 
-
-app = FastAPI(
-    title="PCA Automation API",
-    version=APP_VERSION,
-    description="Validates EOC Excel files and generates editable Exec Summary PPT decks.",
-)
-
-
-# -----------------------------
-# OpenAI Actions file payload
-# -----------------------------
 
 class OpenAIFileRef(BaseModel):
     id: Optional[str] = None
@@ -47,15 +49,20 @@ class OpenAIFileRef(BaseModel):
 
 
 class FileRefsPayload(BaseModel):
-    openaiFileIdRefs: List[OpenAIFileRef] = Field(
-        ...,
-        description="Files supplied by OpenAI Actions. Upload exactly one EOC Excel file.",
-    )
+    openaiFileIdRefs: List[OpenAIFileRef] = Field(...)
 
 
-# -----------------------------
-# Formatting helpers
-# -----------------------------
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "template_exists": TEMPLATE_PATH.exists(),
+        "template_path": str(TEMPLATE_PATH),
+        "rules_master_exists": RULES_MASTER_PATH.exists(),
+        "rules_master_path": str(RULES_MASTER_PATH),
+    }
+
 
 def clean_text(value: Any) -> str:
     if value is None:
@@ -65,145 +72,787 @@ def clean_text(value: Any) -> str:
             return ""
     except Exception:
         pass
-    return str(value).strip()
+    return re.sub(r"\s+", " ", str(value)).strip()
 
 
-def normalise(value: Any) -> str:
-    value = clean_text(value).lower()
-    value = re.sub(r"[^a-z0-9]+", "_", value)
-    return value.strip("_")
+def normalize_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9%./()\- ]+", " ", clean_text(value).lower()).strip()
 
 
-def to_float(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    text = clean_text(value)
-    if not text:
-        return None
+def normalize_header(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
 
-    text = text.replace(",", "").replace("£", "").replace("$", "").replace("€", "").strip()
 
-    is_percent = "%" in text
-    text = text.replace("%", "")
-
+def safe_number(value: Any) -> Optional[float]:
     try:
-        num = float(text)
-        if is_percent:
-            return num
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = (
+                value.replace(",", "")
+                .replace("£", "")
+                .replace("$", "")
+                .replace("€", "")
+                .replace("%", "")
+                .strip()
+            )
+        num = float(value)
+        if math.isnan(num) or math.isinf(num):
+            return None
         return num
     except Exception:
         return None
 
 
-def fmt_int(value: Any) -> str:
-    num = to_float(value)
+def abs_number(value: Any) -> Optional[float]:
+    num = safe_number(value)
     if num is None:
-        return ""
-    return f"{int(round(num)):,}"
+        return None
+    return abs(num)
 
 
-def fmt_currency(value: Any, currency: str = "") -> str:
-    num = to_float(value)
+def format_number(value: Optional[float], decimals: int = 0) -> Optional[str]:
+    if value is None:
+        return None
+    if decimals == 0:
+        return f"{int(round(value)):,}"
+    return f"{value:,.{decimals}f}"
+
+
+def format_currency(value: Optional[float], symbol: str = "€") -> Optional[str]:
+    if value is None:
+        return None
+    return f"{symbol}{value:,.2f}"
+
+
+def format_percent(value: Any) -> Optional[str]:
+    if isinstance(value, str) and "%" in value:
+        return clean_text(value)
+
+    num = safe_number(value)
     if num is None:
-        return ""
+        return None
 
-    symbol = ""
-    cur = clean_text(currency).upper()
+    if num <= 1:
+        num = num * 100
 
-    if cur in ["GBP", "POUND", "POUNDS", "£"]:
-        symbol = "£"
-    elif cur in ["EUR", "EURO", "EUROS", "€"]:
-        symbol = "€"
-    elif cur in ["USD", "DOLLAR", "DOLLARS", "$"]:
-        symbol = "$"
-
-    return f"{symbol}{num:,.0f}"
+    return f"{round(num, 2)}%"
 
 
-def fmt_percent(value: Any, decimals: int = 2) -> str:
-    num = to_float(value)
-    if num is None:
-        return ""
+def parse_date_from_any(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
 
-    # If Excel stores 0.0032 for 0.32%, convert to 0.32
-    if 0 < num <= 1:
-        num *= 100
+    if isinstance(value, datetime):
+        return value
 
-    return f"{num:.{decimals}f}%"
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
 
-
-def safe_ctr(clicks: Any, impressions: Any) -> str:
-    clk = to_float(clicks)
-    imp = to_float(impressions)
-
-    if clk is None or imp is None or imp <= 0:
-        return ""
-
-    return f"{(clk / imp) * 100:.2f}%"
-
-
-def parse_date(value: Any) -> Optional[datetime]:
-    if value is None or clean_text(value) == "":
+    text = clean_text(value)
+    if not text:
         return None
 
     try:
-        dt = pd.to_datetime(value, errors="coerce")
-        if pd.isna(dt):
-            return None
+        dt = pd.to_datetime(text, errors="coerce")
+        if pd.notna(dt):
+            py_dt = dt.to_pydatetime()
+            if 2000 <= py_dt.year <= 2100:
+                return py_dt
+    except Exception:
+        pass
 
-        parsed = dt.to_pydatetime()
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), "%Y-%m-%d")
+        except Exception:
+            pass
 
-        # Avoid bogus Excel/null fallback dates.
-        if parsed.year < 2000:
-            return None
+    match = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]20\d{2})\b", text)
+    if match:
+        try:
+            dt = pd.to_datetime(match.group(1), dayfirst=True, errors="coerce")
+            if pd.notna(dt):
+                return dt.to_pydatetime()
+        except Exception:
+            pass
 
-        return parsed
+    return None
+
+
+def format_date_short(start_dt: Optional[datetime], end_dt: Optional[datetime]) -> Optional[str]:
+    if start_dt and end_dt:
+        return f"{start_dt.strftime('%d %b')} - {end_dt.strftime('%d %b')}"
+    return None
+
+
+def format_date_full(start_dt: Optional[datetime], end_dt: Optional[datetime]) -> Optional[str]:
+    if start_dt and end_dt:
+        if start_dt.year == end_dt.year:
+            return f"{start_dt.strftime('%d %B')} - {end_dt.strftime('%d %B %Y')}"
+        return f"{start_dt.strftime('%d %B %Y')} - {end_dt.strftime('%d %B %Y')}"
+    return None
+
+
+def format_quarter_from_date(end_dt: Optional[datetime]) -> Optional[str]:
+    if not end_dt:
+        return None
+    q = ((end_dt.month - 1) // 3) + 1
+    return f"Q{q} {end_dt.year}"
+
+
+def first_non_empty(series: pd.Series) -> Any:
+    for value in series:
+        if clean_text(value) != "":
+            return value
+    return None
+
+
+def is_blank_row(values: List[Any]) -> bool:
+    return all(clean_text(v) == "" for v in values)
+
+
+def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
+    if not RULES_MASTER_PATH.exists():
+        return None
+
+    try:
+        xls = pd.ExcelFile(RULES_MASTER_PATH, engine="openpyxl")
+        out = {}
+        for sheet in xls.sheet_names:
+            out[sheet] = pd.read_excel(RULES_MASTER_PATH, sheet_name=sheet, engine="openpyxl")
+        return out
     except Exception:
         return None
 
 
-def format_date_short(start: Optional[datetime], end: Optional[datetime]) -> str:
-    if not start and not end:
-        return ""
-    if start and not end:
-        return f"{start.day} {start.strftime('%b')}"
-    if end and not start:
-        return f"{end.day} {end.strftime('%b')}"
-
-    if start.year == end.year:
-        if start.month == end.month:
-            return f"{start.day} - {end.day} {end.strftime('%b')}"
-        return f"{start.day} {start.strftime('%b')} - {end.day} {end.strftime('%b')}"
-
-    return f"{start.day} {start.strftime('%b %Y')} - {end.day} {end.strftime('%b %Y')}"
-
-
-def format_date_full(start: Optional[datetime], end: Optional[datetime]) -> str:
-    if not start and not end:
-        return ""
-    if start and not end:
-        return f"{start.day} {start.strftime('%B %Y')}"
-    if end and not start:
-        return f"{end.day} {end.strftime('%B %Y')}"
-
-    if start.year == end.year:
-        if start.month == end.month:
-            return f"{start.day} - {end.day} {end.strftime('%B %Y')}"
-        return f"{start.day} {start.strftime('%B')} - {end.day} {end.strftime('%B %Y')}"
-
-    return f"{start.day} {start.strftime('%B %Y')} - {end.day} {end.strftime('%B %Y')}"
+ALIASES = {
+    "campaign": ["campaign", "campaign name"],
+    "client_brand": ["client", "brand", "advertiser", "brand / client"],
+    "impressions": ["impressions", "delivered impressions", "served impressions"],
+    "ctr": ["ctr", "click through rate", "click-through rate"],
+    "engagement_rate": ["engagement rate", "engagement %", "er", "total er", "overall er"],
+    "vcr": ["video completion rate", "vcr", "completed view rate", "video % complete"],
+    "on_screen": ["mobkoi on screen", "on screen", "on-screen", "mrc viewability", "viewability", "viewable rate"],
+    "mobkoi_on_screen": ["mobkoi on screen"],
+    "mrc_viewability": ["mrc viewability"],
+    "spend": ["actual spend", "spend", "total spend", "media spend"],
+    "sold_paid_units": ["sold paid units"],
+    "delivered_overall_av_units": ["delivered overall av units", "delivered overall av (units)"],
+    "delivery_incl_av": ["delivery percentage incl av", "delivery percentage (incl av)"],
+    "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)", "worth of added value"],
+    "site": ["site", "publisher", "domain", "environment", "property", "placement"],
+    "geo": ["geo", "market", "country", "region"],
+    "format": ["format", "creative", "creative format", "ad format", "unit type"],
+    "date": ["date", "report date", "served date", "live date"],
+}
 
 
-# -----------------------------
-# File download
-# -----------------------------
+def header_match_score(header: str, aliases: List[str]) -> int:
+    norm = normalize_header(header)
+    best = 0
+
+    for alias in aliases:
+        alias_norm = normalize_header(alias)
+        if norm == alias_norm:
+            best = max(best, 100)
+        elif alias_norm in norm:
+            best = max(best, 85)
+        elif norm in alias_norm:
+            best = max(best, 60)
+
+    return best
+
+
+def find_col(df: pd.DataFrame, key: str) -> Optional[str]:
+    aliases = ALIASES.get(key, [key])
+    best_col = None
+    best_score = 0
+
+    for col in df.columns:
+        score = header_match_score(str(col), aliases)
+        if score > best_score:
+            best_score = score
+            best_col = col
+
+    return best_col if best_score >= 60 else None
+
+
+def score_header_row(row_values: List[Any]) -> int:
+    keywords = [
+        "campaign", "impressions", "ctr", "engagement", "vcr", "completion",
+        "spend", "site", "publisher", "domain", "environment", "property",
+        "geo", "market", "country", "region", "format", "creative", "date",
+        "sold paid units", "delivered overall av", "delivery percentage", "mrc viewability",
+    ]
+
+    score = 0
+    for cell in row_values:
+        text = normalize_text(cell)
+        for kw in keywords:
+            if kw in text:
+                score += 1
+
+    return score
+
+
+def find_candidate_header_rows(df: pd.DataFrame) -> List[int]:
+    candidates = []
+
+    for i in range(min(120, len(df))):
+        row_values = df.iloc[i].tolist()
+        score = score_header_row(row_values)
+
+        if score >= 3:
+            candidates.append(i)
+
+    deduped = []
+    for idx in candidates:
+        if not deduped or idx - deduped[-1] > 2:
+            deduped.append(idx)
+
+    return deduped
+
+
+def build_block_from_header(df: pd.DataFrame, header_row: int) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    temp = df.iloc[header_row:].copy()
+    if temp.empty:
+        return pd.DataFrame()
+
+    temp.columns = [clean_text(c) for c in temp.iloc[0]]
+    temp = temp[1:].reset_index(drop=True)
+    temp = temp.dropna(axis=1, how="all")
+
+    rows = []
+    blank_streak = 0
+
+    for _, row in temp.iterrows():
+        row_vals = row.tolist()
+
+        if is_blank_row(row_vals):
+            blank_streak += 1
+            if blank_streak >= 1:
+                break
+            continue
+
+        blank_streak = 0
+        rows.append(row_vals)
+
+    if not rows:
+        return pd.DataFrame(columns=temp.columns)
+
+    block = pd.DataFrame(rows, columns=temp.columns)
+
+    if not block.empty:
+        header_norm = [normalize_header(c) for c in block.columns]
+        keep_rows = []
+
+        for _, row in block.iterrows():
+            row_norm = [normalize_header(v) for v in row.tolist()]
+            same_count = 0
+
+            for a, b in zip(header_norm[:12], row_norm[:12]):
+                if a and b and a == b:
+                    same_count += 1
+
+            keep_rows.append(same_count < 3)
+
+        block = block[pd.Series(keep_rows).values].reset_index(drop=True)
+
+    return block
+
+
+def classify_table(df: pd.DataFrame) -> str:
+    if df is None or df.empty:
+        return "unknown"
+
+    delivery_hits = sum([
+        1 if find_col(df, "sold_paid_units") else 0,
+        1 if find_col(df, "delivered_overall_av_units") else 0,
+        1 if find_col(df, "delivery_incl_av") else 0,
+        1 if find_col(df, "delivered_av_amount") else 0,
+    ])
+
+    if delivery_hits >= 2:
+        return "campaign_delivery"
+
+    kpi_hits = sum([
+        1 if find_col(df, "campaign") else 0,
+        1 if find_col(df, "impressions") else 0,
+        1 if find_col(df, "ctr") else 0,
+        1 if find_col(df, "engagement_rate") else 0,
+        1 if find_col(df, "vcr") else 0,
+        1 if (find_col(df, "mobkoi_on_screen") or find_col(df, "mrc_viewability") or find_col(df, "on_screen")) else 0,
+        1 if find_col(df, "spend") else 0,
+    ])
+
+    if kpi_hits >= 3:
+        return "campaign_kpi_summary"
+
+    if find_col(df, "site"):
+        return "site"
+
+    if find_col(df, "geo"):
+        return "geo"
+
+    if find_col(df, "format"):
+        return "format"
+
+    date_col = find_col(df, "date")
+    if date_col:
+        col_data = df[date_col]
+        if isinstance(col_data, pd.DataFrame):
+            col_data = col_data.iloc[:, 0]
+
+        sample = [parse_date_from_any(v) for v in col_data.head(10).values]
+        if any(v is not None for v in sample):
+            return "date"
+
+    return "unknown"
+
+
+def table_quality_score(df: pd.DataFrame, table_type: str) -> int:
+    if df is None or df.empty:
+        return -999
+
+    score = 0
+    score += min(len(df.columns), 20)
+    score += min(len(df), 10)
+
+    if table_type == "campaign_kpi_summary":
+        for key in ["campaign", "impressions", "ctr", "engagement_rate", "vcr", "spend"]:
+            if find_col(df, key):
+                score += 10
+
+        if find_col(df, "mobkoi_on_screen"):
+            score += 12
+        elif find_col(df, "mrc_viewability"):
+            score += 6
+
+    elif table_type == "campaign_delivery":
+        for key in ["sold_paid_units", "delivered_overall_av_units", "delivery_incl_av", "delivered_av_amount"]:
+            if find_col(df, key):
+                score += 12
+
+    elif table_type == "site":
+        for key in ["site", "ctr", "engagement_rate", "vcr"]:
+            if find_col(df, key):
+                score += 10
+
+    elif table_type == "geo":
+        for key in ["geo", "impressions"]:
+            if find_col(df, key):
+                score += 10
+
+    elif table_type == "format":
+        for key in ["format", "impressions"]:
+            if find_col(df, key):
+                score += 10
+
+    elif table_type == "date":
+        if find_col(df, "date"):
+            score += 20
+
+    return score
+
+
+def detect_tables(sheets: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    candidates_by_type: Dict[str, List[Tuple[int, pd.DataFrame]]] = {
+        "campaign_kpi_summary": [],
+        "campaign_delivery": [],
+        "site": [],
+        "geo": [],
+        "format": [],
+        "date": [],
+    }
+
+    for _, raw_df in sheets.items():
+        if raw_df is None or raw_df.empty:
+            continue
+
+        header_rows = find_candidate_header_rows(raw_df)
+
+        for header_row in header_rows:
+            block = build_block_from_header(raw_df, header_row)
+            if block.empty:
+                continue
+
+            table_type = classify_table(block)
+            if table_type == "unknown":
+                continue
+
+            score = table_quality_score(block, table_type)
+            candidates_by_type[table_type].append((score, block))
+
+    detected: Dict[str, pd.DataFrame] = {}
+
+    for table_type, candidates in candidates_by_type.items():
+        if candidates:
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            detected[table_type] = candidates[0][1]
+
+    return detected
+
+
+def scan_workbook_texts(sheets: Dict[str, pd.DataFrame]) -> List[str]:
+    texts = []
+
+    for df in sheets.values():
+        if df is None or df.empty:
+            continue
+
+        preview = df.head(20)
+
+        for row in preview.values:
+            for cell in row:
+                text = clean_text(cell)
+                if text:
+                    texts.append(text)
+
+    return texts
+
+
+def extract_dates(
+    sheets: Dict[str, pd.DataFrame],
+    detected: Dict[str, pd.DataFrame],
+    filename: str = "",
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    date_df = detected.get("date")
+
+    if date_df is not None:
+        date_col = find_col(date_df, "date")
+        if date_col:
+            col_data = date_df[date_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+
+            vals = [parse_date_from_any(v) for v in col_data.tolist()]
+            vals = [v for v in vals if v]
+            if vals:
+                return min(vals), max(vals)
+
+    for text in scan_workbook_texts(sheets):
+        low = normalize_text(text)
+        if "report date" in low:
+            dt = parse_date_from_any(text)
+            if dt:
+                return dt - timedelta(days=6), dt
+
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", filename or "")
+    if match:
+        end_dt = parse_date_from_any(match.group(1))
+        if end_dt:
+            start_dt = end_dt - timedelta(days=6)
+            return start_dt, end_dt
+
+    return None, None
+
+
+def extract_kpi_value(df: pd.DataFrame, key: str) -> Any:
+    col = find_col(df, key)
+    if not col:
+        return None
+
+    col_data = df[col]
+    if isinstance(col_data, pd.DataFrame):
+        col_data = col_data.iloc[:, 0]
+
+    return first_non_empty(col_data)
+
+
+def extract_client_name(
+    sheets: Dict[str, pd.DataFrame],
+    detected: Dict[str, pd.DataFrame],
+    filename: str = "",
+) -> Optional[str]:
+    for table_name in ["campaign_kpi_summary", "campaign_delivery"]:
+        df = detected.get(table_name)
+        if df is not None:
+            col = find_col(df, "client_brand")
+            if col:
+                val = first_non_empty(df[col])
+                if clean_text(val):
+                    return clean_text(val)
+
+    for text in scan_workbook_texts(sheets):
+        low = normalize_text(text)
+        if "client:" in low or "brand:" in low:
+            parts = text.split(":")
+            if len(parts) > 1:
+                candidate = clean_text(parts[-1])
+                if candidate:
+                    return candidate
+
+    kpi_df = detected.get("campaign_kpi_summary")
+    if kpi_df is not None:
+        campaign_val = clean_text(extract_kpi_value(kpi_df, "campaign"))
+        if campaign_val:
+            for sep in [" - ", " | ", "_"]:
+                if sep in campaign_val:
+                    return clean_text(campaign_val.split(sep)[0])
+
+            words = campaign_val.split()
+            if words:
+                return words[0]
+
+    if filename:
+        base = Path(filename).stem
+        if " - " in base:
+            return clean_text(base.split(" - ")[0])
+
+    return None
+
+
+def join_dimension_values(df: pd.DataFrame, dim_key: str) -> Optional[str]:
+    col = find_col(df, dim_key)
+    if not col:
+        return None
+
+    col_data = df[col]
+    if isinstance(col_data, pd.DataFrame):
+        col_data = col_data.iloc[:, 0]
+
+    raw_vals = [clean_text(v) for v in col_data.tolist() if clean_text(v)]
+
+    if not raw_vals:
+        return None
+
+    base = raw_vals[0]
+    cleaned = [base]
+
+    for val in raw_vals[1:]:
+        parts_base = base.split(" - ")
+        parts_val = val.split(" - ")
+
+        suffix = parts_val
+
+        for i in range(min(len(parts_base), len(parts_val))):
+            if parts_base[i] != parts_val[i]:
+                suffix = parts_val[i:]
+                break
+        else:
+            if len(parts_val) > len(parts_base):
+                suffix = parts_val[len(parts_base):]
+            else:
+                suffix = [val]
+
+        candidate = " - ".join([p for p in suffix if p])
+        if candidate:
+            cleaned.append(candidate)
+
+    seen = []
+    final = []
+
+    for v in cleaned:
+        if v not in seen:
+            seen.append(v)
+            final.append(v)
+
+    return ", ".join(final)
+
+
+def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> Dict[str, Any]:
+    site_col = find_col(df, "site")
+    metric_col = find_col(df, metric_key)
+
+    if not site_col or not metric_col:
+        return {}
+
+    site_data = df[site_col]
+    if isinstance(site_data, pd.DataFrame):
+        site_data = site_data.iloc[:, 0]
+
+    metric_data = df[metric_col]
+    if isinstance(metric_data, pd.DataFrame):
+        metric_data = metric_data.iloc[:, 0]
+
+    temp = pd.DataFrame({
+        "site": site_data,
+        "metric": metric_data,
+    })
+
+    temp["metric"] = temp["metric"].apply(safe_number)
+    temp = temp.dropna(subset=["metric"])
+
+    temp = temp[
+        temp["site"].apply(
+            lambda x: clean_text(x).lower()
+            not in ["site", "publisher", "domain", "environment", "property", "placement"]
+        )
+    ]
+
+    if temp.empty:
+        return {}
+
+    temp = temp.sort_values(by="metric", ascending=False).head(max_rank)
+
+    prefix = {
+        "ctr": "TOP_TITLES_CTR",
+        "engagement_rate": "TOP_TITLES_ER",
+        "vcr": "TOP_TITLES_VCR",
+    }[metric_key]
+
+    out = {}
+
+    for idx, (_, row) in enumerate(temp.iterrows(), start=1):
+        out[f"{prefix}_{idx}_NAME"] = clean_text(row["site"])
+        out[f"{prefix}_{idx}_VALUE"] = format_percent(row["metric"])
+
+    return out
+
+
+def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    required_core = [
+        "CAMPAIGN_NAME",
+        "DELIVERED_IMPRESSIONS",
+        "PERFORMANCE_CTR",
+        "PERFORMANCE_ENGAGEMENT_RATE",
+        "PERFORMANCE_VCR",
+        "LIVE_DATES_FULL",
+    ]
+
+    missing_required = [k for k in required_core if not mapped.get(k)]
+
+    warnings = []
+
+    if not mapped.get("CLIENT_NAME"):
+        warnings.append("CLIENT_NAME missing")
+    if not mapped.get("CAMPAIGN_MARKETS"):
+        warnings.append("CAMPAIGN_MARKETS missing")
+    if not mapped.get("CAMPAIGN_FORMATS"):
+        warnings.append("CAMPAIGN_FORMATS missing")
+    if not mapped.get("TOP_TITLES_CTR_1_NAME"):
+        warnings.append("Top Titles CTR missing")
+    if not mapped.get("TOP_TITLES_VCR_1_NAME"):
+        warnings.append("Top Titles VCR missing")
+    if not mapped.get("TOP_TITLES_ER_1_NAME"):
+        warnings.append("Top Titles ER missing")
+
+    return {
+        "is_valid": len(missing_required) == 0,
+        "missing_required": missing_required,
+        "warnings": warnings,
+    }
+
+
+def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> Dict[str, Any]:
+    rules = load_rules_master()
+    rules_available = rules is not None
+
+    detected = detect_tables(sheets)
+
+    kpi_df = detected.get("campaign_kpi_summary")
+    delivery_df = detected.get("campaign_delivery")
+    site_df = detected.get("site")
+    geo_df = detected.get("geo")
+    format_df = detected.get("format")
+
+    start_dt, end_dt = extract_dates(sheets, detected, filename)
+    client_name = extract_client_name(sheets, detected, filename)
+
+    mapped: Dict[str, Any] = {}
+
+    if kpi_df is not None:
+        mapped["CAMPAIGN_NAME"] = clean_text(extract_kpi_value(kpi_df, "campaign"))
+        mapped["DELIVERED_IMPRESSIONS"] = format_number(safe_number(extract_kpi_value(kpi_df, "impressions")), 0)
+        mapped["PERFORMANCE_CTR"] = format_percent(extract_kpi_value(kpi_df, "ctr"))
+        mapped["PERFORMANCE_ENGAGEMENT_RATE"] = format_percent(extract_kpi_value(kpi_df, "engagement_rate"))
+        mapped["PERFORMANCE_VCR"] = format_percent(extract_kpi_value(kpi_df, "vcr"))
+
+        on_screen_val = None
+        mobkoi_col = find_col(kpi_df, "mobkoi_on_screen")
+        mrc_col = find_col(kpi_df, "mrc_viewability")
+        generic_col = find_col(kpi_df, "on_screen")
+
+        if mobkoi_col:
+            col_data = kpi_df[mobkoi_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+            on_screen_val = first_non_empty(col_data)
+        elif mrc_col:
+            col_data = kpi_df[mrc_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+            on_screen_val = first_non_empty(col_data)
+        elif generic_col:
+            col_data = kpi_df[generic_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+            on_screen_val = first_non_empty(col_data)
+
+        mapped["PERFORMANCE_ON_SCREEN"] = format_percent(on_screen_val)
+
+        spend_val = extract_kpi_value(kpi_df, "spend")
+        mapped["CAMPAIGN_BUDGET"] = format_currency(safe_number(spend_val))
+    else:
+        mapped["CAMPAIGN_NAME"] = None
+        mapped["DELIVERED_IMPRESSIONS"] = None
+        mapped["PERFORMANCE_CTR"] = None
+        mapped["PERFORMANCE_ENGAGEMENT_RATE"] = None
+        mapped["PERFORMANCE_VCR"] = None
+        mapped["PERFORMANCE_ON_SCREEN"] = None
+        mapped["CAMPAIGN_BUDGET"] = None
+
+    if delivery_df is not None:
+        io_val = safe_number(extract_kpi_value(delivery_df, "sold_paid_units"))
+        av_units_val = abs_number(extract_kpi_value(delivery_df, "delivered_overall_av_units"))
+        av_amount_val = abs_number(extract_kpi_value(delivery_df, "delivered_av_amount"))
+
+        mapped["IO_OVERALL_IMPRESSIONS"] = format_number(io_val, 0)
+        mapped["DELIVERED_OVERALL_AV_UNITS"] = format_number(av_units_val, 0)
+        mapped["DELIVERY_WITH_AV_PERCENT"] = format_percent(extract_kpi_value(delivery_df, "delivery_incl_av"))
+        mapped["ADDED_VALUE_WORTH"] = format_currency(av_amount_val)
+        mapped["ADDED_VALUE_IMPRESSIONS"] = format_number(av_units_val, 0)
+    else:
+        mapped["IO_OVERALL_IMPRESSIONS"] = None
+        mapped["DELIVERED_OVERALL_AV_UNITS"] = None
+        mapped["DELIVERY_WITH_AV_PERCENT"] = None
+        mapped["ADDED_VALUE_WORTH"] = None
+        mapped["ADDED_VALUE_IMPRESSIONS"] = None
+
+    mapped["CLIENT_NAME"] = client_name
+    mapped["CAMPAIGN_FORMATS"] = join_dimension_values(format_df, "format") if format_df is not None else None
+    mapped["CAMPAIGN_MARKETS"] = join_dimension_values(geo_df, "geo") if geo_df is not None else None
+    mapped["LIVE_DATES_SHORT"] = format_date_short(start_dt, end_dt)
+    mapped["LIVE_DATES_FULL"] = format_date_full(start_dt, end_dt)
+    mapped["CAMPAIGN_PERIOD"] = format_quarter_from_date(end_dt)
+
+    if site_df is not None:
+        mapped.update(extract_top_titles(site_df, "ctr", 5))
+        mapped.update(extract_top_titles(site_df, "engagement_rate", 5))
+        mapped.update(extract_top_titles(site_df, "vcr", 5))
+
+    for metric_prefix in ["TOP_TITLES_CTR", "TOP_TITLES_ER", "TOP_TITLES_VCR"]:
+        for i in range(1, 6):
+            mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
+            mapped.setdefault(f"{metric_prefix}_{i}_VALUE", None)
+
+    validation = validate_mapped_values(mapped)
+
+    diagnostics = {
+        "detected_tables": list(detected.keys()),
+        "table_columns": {k: [str(c) for c in v.columns] for k, v in detected.items()},
+        "rules_master_loaded": rules_available,
+        "version": APP_VERSION,
+    }
+
+    return {
+        "mapped_values": mapped,
+        "validation": validation,
+        "diagnostics": diagnostics,
+    }
+
 
 async def download_openai_file(file_ref: OpenAIFileRef, dest_dir: Path) -> Path:
     if not file_ref.download_link:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing download_link in openaiFileIdRefs.",
-        )
+        raise HTTPException(status_code=400, detail="Missing download_link in openaiFileIdRefs.")
 
     safe_name = file_ref.name or "uploaded_eoc.xlsx"
     safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", safe_name)
@@ -217,554 +866,148 @@ async def download_openai_file(file_ref: OpenAIFileRef, dest_dir: Path) -> Path:
     return output_path
 
 
-def read_eoc(file_path: Path) -> Dict[str, pd.DataFrame]:
+def read_uploaded_eoc(path: Path) -> Dict[str, pd.DataFrame]:
     try:
-        return pd.read_excel(file_path, sheet_name=None, header=None, engine="openpyxl")
+        return pd.read_excel(path, sheet_name=None, header=None, engine="openpyxl")
     except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Could not read EOC Excel file: {exc}",
-        )
+        raise HTTPException(status_code=400, detail=f"Could not read EOC Excel file: {exc}")
 
 
-# -----------------------------
-# Hybrid parser
-# -----------------------------
+def replace_text(text: str, data: dict) -> str:
+    if not text:
+        return text
 
-def get_cell(df: pd.DataFrame, r: int, c: int) -> Any:
-    if r < 0 or c < 0:
-        return ""
-    if r >= df.shape[0] or c >= df.shape[1]:
-        return ""
-    return df.iat[r, c]
+    for key, value in data.items():
+        placeholder = f"{{{{{key}}}}}"
+        text = text.replace(placeholder, "" if value is None else str(value))
 
+    return text
 
-def find_label_value(
-    sheets: Dict[str, pd.DataFrame],
-    labels: List[str],
-    right_offsets: Tuple[int, ...] = (1, 2),
-    below_offsets: Tuple[int, ...] = (1,),
-) -> Any:
-    """
-    Primary label lookup.
-    Searches for labels and returns nearby values to the right or below.
-    This is used only when labels are clearly found.
-    """
-    wanted = [normalise(x) for x in labels]
 
-    for df in sheets.values():
-        for r in range(df.shape[0]):
-            for c in range(df.shape[1]):
-                cell_norm = normalise(get_cell(df, r, c))
-                if not cell_norm:
-                    continue
-
-                matched = False
-
-                for label in wanted:
-                    if cell_norm == label or label in cell_norm:
-                        matched = True
-                        break
-
-                if not matched:
-                    continue
-
-                for off in right_offsets:
-                    val = get_cell(df, r, c + off)
-                    if clean_text(val):
-                        return val
-
-                for off in below_offsets:
-                    val = get_cell(df, r + off, c)
-                    if clean_text(val):
-                        return val
-
-    return ""
-
-
-def find_campaign_row_values(sheets: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
-    """
-    Detects common EOC summary blocks like:
-    Campaign | Currency | Sold Paid Units
-    Prada... | Euro     | 1136364
-
-    Campaign | Impressions | Clicks
-    Prada... | 1175313     | 9153
-    """
-    result: Dict[str, Any] = {}
-
-    for df in sheets.values():
-        for r in range(df.shape[0] - 1):
-            row_norm = [normalise(get_cell(df, r, c)) for c in range(df.shape[1])]
-
-            if "campaign" not in row_norm:
-                continue
-
-            campaign_col = row_norm.index("campaign")
-            campaign_value = get_cell(df, r + 1, campaign_col)
-
-            if clean_text(campaign_value):
-                result.setdefault("CAMPAIGN_NAME", campaign_value)
-
-            for c, header in enumerate(row_norm):
-                value = get_cell(df, r + 1, c)
-
-                if not clean_text(value):
-                    continue
-
-                if header in ["currency"]:
-                    result["CURRENCY"] = value
-                elif header in ["market", "markets", "country", "countries"]:
-                    result["MARKETS"] = value
-                elif header in ["sold_paid_units", "booked_impressions", "planned_impressions"]:
-                    result["SOLD_PAID_UNITS"] = value
-                elif header in ["impressions", "delivered_impressions"]:
-                    result["IMPRESSIONS"] = value
-                elif header in ["clicks", "total_clicks"]:
-                    result["CLICKS"] = value
-                elif header in ["ctr", "click_through_rate"]:
-                    result["CTR"] = value
-                elif header in ["video_starts", "starts"]:
-                    result["VIDEO_STARTS"] = value
-                elif header in ["video_completes", "completed_views", "completions"]:
-                    result["COMPLETED_VIEWS"] = value
-                elif header in ["vcr", "video_completion_rate"]:
-                    result["VCR"] = value
-                elif header in ["engagements", "total_engagements"]:
-                    result["ENGAGEMENTS"] = value
-                elif header in ["engagement_rate", "er"]:
-                    result["ENGAGEMENT_RATE"] = value
-                elif header in ["viewability", "viewability_rate"]:
-                    result["VIEWABILITY"] = value
-                elif header in ["spend", "budget", "media_spend"]:
-                    result["BUDGET"] = value
-
-    return result
-
-
-def extract_metric_table(sheets: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
-    """
-    Finds metric-style tables where metrics are headers or row labels.
-    Used after campaign row extraction.
-    """
-    result: Dict[str, Any] = {}
-
-    metric_aliases = {
-        "IMPRESSIONS": ["impressions", "delivered_impressions"],
-        "CLICKS": ["clicks", "total_clicks"],
-        "CTR": ["ctr", "click_through_rate"],
-        "ENGAGEMENTS": ["engagements", "total_engagements"],
-        "ENGAGEMENT_RATE": ["engagement_rate", "er"],
-        "VIEWABILITY": ["viewability", "viewability_rate"],
-        "VCR": ["vcr", "video_completion_rate", "completion_rate"],
-        "COMPLETED_VIEWS": ["completed_views", "video_completes", "completions"],
-        "VIDEO_STARTS": ["video_starts", "starts"],
-        "BUDGET": ["budget", "spend", "media_spend"],
-    }
-
-    for df in sheets.values():
-        for r in range(df.shape[0]):
-            for c in range(df.shape[1]):
-                cell = normalise(get_cell(df, r, c))
-                if not cell:
-                    continue
-
-                for canonical, aliases in metric_aliases.items():
-                    if cell in aliases or any(alias in cell for alias in aliases):
-                        # Prefer right cell, then below.
-                        right = get_cell(df, r, c + 1)
-                        below = get_cell(df, r + 1, c)
-
-                        if clean_text(right):
-                            result.setdefault(canonical, right)
-                        elif clean_text(below):
-                            result.setdefault(canonical, below)
-
-    return result
-
-
-def extract_market_from_sheet(sheets: Dict[str, pd.DataFrame]) -> str:
-    val = find_label_value(
-        sheets,
-        ["Market", "Markets", "Country", "Countries"],
-        right_offsets=(1, 2),
-        below_offsets=(1,),
-    )
-    return clean_text(val)
-
-
-def extract_dates(sheets: Dict[str, pd.DataFrame]) -> Tuple[Optional[datetime], Optional[datetime]]:
-    start_raw = find_label_value(
-        sheets,
-        ["Start Date", "Live Start", "Campaign Start", "Flight Start", "From"],
-    )
-    end_raw = find_label_value(
-        sheets,
-        ["End Date", "Live End", "Campaign End", "Flight End", "To"],
-    )
-
-    start = parse_date(start_raw)
-    end = parse_date(end_raw)
-
-    # Fallback: scan plausible date cells.
-    if not start or not end:
-        dates: List[datetime] = []
-
-        for df in sheets.values():
-            for r in range(df.shape[0]):
-                for c in range(df.shape[1]):
-                    dt = parse_date(get_cell(df, r, c))
-                    if dt:
-                        dates.append(dt)
-
-        if dates:
-            dates = sorted(dates)
-            start = start or dates[0]
-            end = end or dates[-1]
-
-    return start, end
-
-
-def extract_top_titles(sheets: Dict[str, pd.DataFrame], metric: str, limit: int = 3) -> List[Dict[str, str]]:
-    """
-    Finds rows with title/site and metric columns.
-    Prevents wrong CTRs by treating percent values safely.
-    """
-    name_headers = ["site", "publisher", "title", "placement", "domain", "inventory"]
-    metric_headers = {
-        "CTR": ["ctr", "click_through_rate"],
-        "ENGAGEMENT_RATE": ["engagement_rate", "er"],
-        "VCR": ["vcr", "video_completion_rate", "completion_rate"],
-    }.get(metric, [])
-
-    found: List[Tuple[float, str, Any]] = []
-
-    for df in sheets.values():
-        for r in range(df.shape[0]):
-            headers = [normalise(get_cell(df, r, c)) for c in range(df.shape[1])]
-
-            name_col = None
-            metric_col = None
-
-            for c, h in enumerate(headers):
-                if h in name_headers and name_col is None:
-                    name_col = c
-                if h in metric_headers and metric_col is None:
-                    metric_col = c
-
-            if name_col is None or metric_col is None:
-                continue
-
-            for rr in range(r + 1, df.shape[0]):
-                name = clean_text(get_cell(df, rr, name_col))
-                raw_metric = get_cell(df, rr, metric_col)
-                metric_num = to_float(raw_metric)
-
-                if not name or metric_num is None:
-                    continue
-
-                # If stored as decimal, convert for sorting/display later.
-                sort_num = metric_num * 100 if 0 < metric_num <= 1 else metric_num
-
-                if sort_num < 0 or sort_num > 100:
-                    # Avoid nonsense like 31,122% unless this is genuinely not a rate.
-                    continue
-
-                found.append((sort_num, name, raw_metric))
-
-    found.sort(key=lambda x: x[0], reverse=True)
-
-    return [
-        {
-            "name": item[1],
-            "value": fmt_percent(item[2]),
-        }
-        for item in found[:limit]
-    ]
-
-
-def build_mapped_values(file_path: Path) -> Dict[str, str]:
-    sheets = read_eoc(file_path)
-
-    campaign_rows = find_campaign_row_values(sheets)
-    metric_table = extract_metric_table(sheets)
-
-    campaign_name = (
-        clean_text(campaign_rows.get("CAMPAIGN_NAME"))
-        or clean_text(find_label_value(sheets, ["Campaign Name", "Campaign"]))
-    )
-
-    client_name = clean_text(
-        find_label_value(sheets, ["Client", "Advertiser", "Brand"])
-    )
-
-    markets = (
-        clean_text(campaign_rows.get("MARKETS"))
-        or extract_market_from_sheet(sheets)
-    )
-
-    currency = clean_text(campaign_rows.get("CURRENCY"))
-
-    start_date, end_date = extract_dates(sheets)
-
-    impressions = (
-        campaign_rows.get("IMPRESSIONS")
-        or metric_table.get("IMPRESSIONS")
-        or find_label_value(sheets, ["Impressions", "Delivered Impressions"])
-    )
-
-    clicks = (
-        campaign_rows.get("CLICKS")
-        or metric_table.get("CLICKS")
-        or find_label_value(sheets, ["Clicks", "Total Clicks"])
-    )
-
-    ctr = (
-        campaign_rows.get("CTR")
-        or metric_table.get("CTR")
-        or find_label_value(sheets, ["CTR", "Click Through Rate", "Click-Through Rate"])
-    )
-
-    engagements = (
-        campaign_rows.get("ENGAGEMENTS")
-        or metric_table.get("ENGAGEMENTS")
-        or find_label_value(sheets, ["Engagements", "Total Engagements"])
-    )
-
-    engagement_rate = (
-        campaign_rows.get("ENGAGEMENT_RATE")
-        or metric_table.get("ENGAGEMENT_RATE")
-        or find_label_value(sheets, ["Engagement Rate", "ER"])
-    )
-
-    viewability = (
-        campaign_rows.get("VIEWABILITY")
-        or metric_table.get("VIEWABILITY")
-        or find_label_value(sheets, ["Viewability", "Viewability Rate"])
-    )
-
-    completed_views = (
-        campaign_rows.get("COMPLETED_VIEWS")
-        or metric_table.get("COMPLETED_VIEWS")
-        or find_label_value(sheets, ["Completed Views", "Video Completes", "Completions"])
-    )
-
-    video_starts = (
-        campaign_rows.get("VIDEO_STARTS")
-        or metric_table.get("VIDEO_STARTS")
-        or find_label_value(sheets, ["Video Starts", "Starts"])
-    )
-
-    vcr = (
-        campaign_rows.get("VCR")
-        or metric_table.get("VCR")
-        or find_label_value(sheets, ["VCR", "Video Completion Rate", "Completion Rate"])
-    )
-
-    budget = (
-        campaign_rows.get("BUDGET")
-        or metric_table.get("BUDGET")
-        or find_label_value(sheets, ["Budget", "Spend", "Media Spend"])
-    )
-
-    sold_paid_units = campaign_rows.get("SOLD_PAID_UNITS")
-
-    # Safe derived metrics.
-    ctr_final = fmt_percent(ctr) if clean_text(ctr) else safe_ctr(clicks, impressions)
-
-    if not clean_text(vcr) and to_float(video_starts) and to_float(completed_views):
-        starts = to_float(video_starts)
-        completes = to_float(completed_views)
-        if starts and starts > 0 and completes is not None:
-            vcr_final = f"{(completes / starts) * 100:.2f}%"
-        else:
-            vcr_final = ""
-    else:
-        vcr_final = fmt_percent(vcr)
-
-    top_ctr = extract_top_titles(sheets, "CTR", 3)
-    top_er = extract_top_titles(sheets, "ENGAGEMENT_RATE", 3)
-    top_vcr = extract_top_titles(sheets, "VCR", 3)
-
-    mapped = {
-        "CAMPAIGN_NAME": campaign_name,
-        "CLIENT_NAME": client_name,
-        "MARKETS": markets,
-        "FORMAT": clean_text(find_label_value(sheets, ["Format", "Product", "Creative Format"])),
-        "LIVE_DATES_SHORT": format_date_short(start_date, end_date),
-        "LIVE_DATES_FULL": format_date_full(start_date, end_date),
-
-        "IMPRESSIONS": fmt_int(impressions),
-        "CLICKS": fmt_int(clicks),
-        "CTR": ctr_final,
-
-        "ENGAGEMENTS": fmt_int(engagements),
-        "ENGAGEMENT_RATE": fmt_percent(engagement_rate),
-
-        "VIEWABILITY": fmt_percent(viewability),
-
-        "VIDEO_STARTS": fmt_int(video_starts),
-        "COMPLETED_VIEWS": fmt_int(completed_views),
-        "VCR": vcr_final,
-        "VIDEO_COMPLETION_RATE": vcr_final,
-
-        "BUDGET": fmt_currency(budget, currency),
-        "SOLD_PAID_UNITS": fmt_int(sold_paid_units),
-        "CURRENCY": currency,
-    }
-
-    for idx in range(1, 4):
-        ctr_row = top_ctr[idx - 1] if len(top_ctr) >= idx else {"name": "", "value": ""}
-        er_row = top_er[idx - 1] if len(top_er) >= idx else {"name": "", "value": ""}
-        vcr_row = top_vcr[idx - 1] if len(top_vcr) >= idx else {"name": "", "value": ""}
-
-        mapped[f"TOP_TITLES_CTR_{idx}_NAME"] = ctr_row["name"]
-        mapped[f"TOP_TITLES_CTR_{idx}_VALUE"] = ctr_row["value"]
-
-        mapped[f"TOP_TITLES_ER_{idx}_NAME"] = er_row["name"]
-        mapped[f"TOP_TITLES_ER_{idx}_VALUE"] = er_row["value"]
-
-        mapped[f"TOP_TITLES_VCR_{idx}_NAME"] = vcr_row["name"]
-        mapped[f"TOP_TITLES_VCR_{idx}_VALUE"] = vcr_row["value"]
-
-    return mapped
-
-
-def parse_eoc(file_path: Path) -> Dict[str, Any]:
-    mapped = build_mapped_values(file_path)
-
-    missing = [
-        key for key in [
-            "CAMPAIGN_NAME",
-            "IMPRESSIONS",
-            "CLICKS",
-            "CTR",
-        ]
-        if not mapped.get(key)
-    ]
-
-    return {
-        "file_name": file_path.name,
-        "version": APP_VERSION,
-        "template_source": str(TEMPLATE_PATH),
-        "status": "ready" if not missing else "needs_review",
-        "missing_critical_fields": missing,
-        "mapped_values": mapped,
-    }
-
-
-# -----------------------------
-# PowerPoint generation
-# -----------------------------
-
-def replace_in_text_frame(text_frame, values: Dict[str, str]) -> None:
-    for paragraph in text_frame.paragraphs:
-        for run in paragraph.runs:
-            text = run.text
-            for key, value in values.items():
-                text = text.replace(f"{{{{{key}}}}}", clean_text(value))
-            run.text = text
-
-
-def replace_placeholders_in_shape(shape, values: Dict[str, str]) -> None:
+def replace_in_shape(shape, data: dict):
     if hasattr(shape, "text_frame") and shape.has_text_frame:
-        replace_in_text_frame(shape.text_frame, values)
+        for paragraph in shape.text_frame.paragraphs:
+            for run in paragraph.runs:
+                run.text = replace_text(run.text, data)
 
     if hasattr(shape, "table") and shape.has_table:
         for row in shape.table.rows:
             for cell in row.cells:
-                replace_in_text_frame(cell.text_frame, values)
+                for paragraph in cell.text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        run.text = replace_text(run.text, data)
 
     if hasattr(shape, "shapes"):
         for child in shape.shapes:
-            replace_placeholders_in_shape(child, values)
+            replace_in_shape(child, data)
 
 
-def generate_ppt(mapped_values: Dict[str, str], output_path: Path) -> None:
-    if not TEMPLATE_PATH.exists():
+def generate_ppt_from_template(template_path: Path, output_path: Path, data: dict):
+    if not template_path.exists():
         raise HTTPException(
             status_code=500,
-            detail=f"Template not found at {TEMPLATE_PATH}. Confirm templates/exec_summary_master.pptx exists in repo.",
+            detail=f"Template not found at {template_path}",
         )
 
-    prs = Presentation(str(TEMPLATE_PATH))
+    prs = Presentation(template_path)
 
     for slide in prs.slides:
         for shape in slide.shapes:
-            replace_placeholders_in_shape(shape, mapped_values)
+            replace_in_shape(shape, data)
 
-    prs.save(str(output_path))
-
-
-def create_output_filename(mapped_values: Dict[str, str]) -> str:
-    client = mapped_values.get("CLIENT_NAME") or "Client"
-    campaign = mapped_values.get("CAMPAIGN_NAME") or "Campaign"
-    raw = f"{client} - {campaign} - Exec Summary.pptx"
-    return re.sub(r"[^A-Za-z0-9._ -]+", "_", raw).strip()
+    prs.save(output_path)
 
 
-# -----------------------------
-# API endpoints
-# -----------------------------
-
-@app.get("/health")
-def health():
-    return {
-        "status": "ok",
-        "version": APP_VERSION,
-        "template_exists": TEMPLATE_PATH.exists(),
-        "template_path": str(TEMPLATE_PATH),
-    }
+def safe_filename(value: str) -> str:
+    value = clean_text(value) or "Campaign"
+    return re.sub(r'[\\/*?:"<>|]', "", value)
 
 
 @app.post("/validate-eoc")
 async def validate_eoc(payload: FileRefsPayload):
-    if not payload.openaiFileIdRefs:
-        raise HTTPException(status_code=400, detail="No EOC file supplied.")
+    try:
+        if not payload.openaiFileIdRefs:
+            raise HTTPException(status_code=400, detail="No EOC file supplied.")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        eoc_path = await download_openai_file(payload.openaiFileIdRefs[0], tmp_dir)
-        validation = parse_eoc(eoc_path)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            eoc_path = await download_openai_file(payload.openaiFileIdRefs[0], tmp_dir)
+            sheets = read_uploaded_eoc(eoc_path)
+            result = build_mapped_values(sheets, filename=eoc_path.name)
 
-    return JSONResponse(validation)
+        return JSONResponse(content={
+            "status": "validated",
+            "version": APP_VERSION,
+            **result,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "trace": traceback.format_exc(),
+                "version": APP_VERSION,
+            },
+        )
 
 
 @app.post("/generate-exec-summary")
 async def generate_exec_summary(payload: FileRefsPayload):
-    if not payload.openaiFileIdRefs:
-        raise HTTPException(status_code=400, detail="No EOC file supplied.")
+    try:
+        if not payload.openaiFileIdRefs:
+            raise HTTPException(status_code=400, detail="No EOC file supplied.")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        eoc_path = await download_openai_file(payload.openaiFileIdRefs[0], tmp_dir)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
 
-        validation = parse_eoc(eoc_path)
-        mapped_values = validation["mapped_values"]
+            eoc_path = await download_openai_file(payload.openaiFileIdRefs[0], tmp_dir)
+            sheets = read_uploaded_eoc(eoc_path)
 
-        filename = create_output_filename(mapped_values)
-        pptx_path = tmp_dir / filename
+            result = build_mapped_values(sheets, filename=eoc_path.name)
+            mapped_data = result["mapped_values"]
 
-        generate_ppt(mapped_values, pptx_path)
+            campaign_name = safe_filename(mapped_data.get("CAMPAIGN_NAME") or "Campaign")
+            filename = f"Exec Summary_PCA One Pager_{campaign_name}.pptx"
+            output_path = tmp_dir / filename
 
-        file_size = pptx_path.stat().st_size
-        if file_size > MAX_RETURN_FILE_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail="Generated PPT is over 10MB. Reduce template media size.",
+            generate_ppt_from_template(
+                template_path=TEMPLATE_PATH,
+                output_path=output_path,
+                data=mapped_data,
             )
 
-        encoded = base64.b64encode(pptx_path.read_bytes()).decode("utf-8")
+            if output_path.stat().st_size > MAX_RETURN_FILE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Generated PPT is over 10MB. Reduce template media size.",
+                )
 
-    return {
-        "status": "success",
-        "version": APP_VERSION,
-        "summary": validation,
-        "openaiFileResponse": [
-            {
-                "name": filename,
-                "mime_type": PPTX_MIME,
-                "content": encoded,
-            }
-        ],
-    }
+            encoded = base64.b64encode(output_path.read_bytes()).decode("utf-8")
+
+        return {
+            "status": "success",
+            "version": APP_VERSION,
+            "summary": result,
+            "openaiFileResponse": [
+                {
+                    "name": filename,
+                    "mime_type": PPTX_MIME,
+                    "content": encoded,
+                }
+            ],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "trace": traceback.format_exc(),
+                "version": APP_VERSION,
+            },
+        )
