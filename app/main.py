@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.0.8-hybrid-actions"
+APP_VERSION = "10.1.0-hybrid-refinement"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
@@ -67,6 +67,10 @@ def clean_text(value: Any) -> str:
 def clean_dimension_label(value: Any) -> str:
     value = clean_text(value)
     value = re.sub(r"\bMISCRL\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"([a-z])([A-Z])", r"\1 \2", value)
+    value = re.sub(r"\bDisplay\s*Animated\b", "Display Animated", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bIn\s*Situ\s*Video\b", "In Situ Video", value, flags=re.IGNORECASE)
+    value = re.sub(r"[-_]+", " - ", value)
     value = re.sub(r"\s+-\s+-\s+", " - ", value)
     value = re.sub(r"\s{2,}", " ", value)
     return value.strip(" -")
@@ -243,7 +247,7 @@ ALIASES = {
     "delivery_incl_av": ["delivery percentage incl av", "delivery percentage (incl av)"],
     "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)", "worth of added value"],
     "site": ["site", "publisher", "domain", "environment", "property", "placement", "title", "inventory", "app", "website"],
-    "geo": ["geo", "market", "markets", "country", "countries", "region", "territory"],
+    "geo": ["geo", "market", "markets", "country", "countries", "region", "territory", "location", "locale"],
     "format": ["format", "formats", "creative", "creative format", "ad format", "unit type", "product", "product type", "placement type"],
     "date": ["date", "report date", "served date", "live date"],
 }
@@ -284,7 +288,7 @@ def score_header_row(row_values: List[Any]) -> int:
         "campaign", "impressions", "ctr", "engagement", "vcr", "completion",
         "spend", "site", "publisher", "domain", "environment", "property",
         "placement", "title", "inventory", "app", "website",
-        "geo", "market", "markets", "country", "countries", "region", "territory",
+        "geo", "market", "markets", "country", "countries", "region", "territory", "location", "locale",
         "format", "formats", "creative", "product", "unit type",
         "date", "report date", "served date", "live date",
         "sold paid units", "delivered overall av", "delivery percentage", "mrc viewability",
@@ -682,15 +686,20 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
         metric_data = metric_data.iloc[:, 0]
 
     temp = pd.DataFrame({"site": site_data, "metric": metric_data})
+    temp["site_clean"] = temp["site"].apply(clean_text)
+    temp["site_norm"] = temp["site_clean"].apply(lambda x: normalize_header(x))
     temp["metric"] = temp["metric"].apply(safe_number)
     temp = temp.dropna(subset=["metric"])
 
-    blocked = [
+    blocked_exact = {
         "site", "publisher", "domain", "environment", "property",
-        "placement", "title", "inventory", "app", "website"
-    ]
+        "placement", "title", "inventory", "app", "website",
+        "total", "totals", "overall", "average", "avg", "summary",
+        "campaign", "campaign name", "market", "format", "creative"
+    }
 
-    temp = temp[temp["site"].apply(lambda x: clean_text(x).lower() not in blocked)]
+    temp = temp[~temp["site_norm"].isin(blocked_exact)]
+    temp = temp[temp["site_clean"] != ""]
 
     if temp.empty:
         return {}
@@ -706,7 +715,7 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
     out = {}
 
     for idx, (_, row) in enumerate(temp.iterrows(), start=1):
-        out[f"{prefix}_{idx}_NAME"] = clean_text(row["site"])
+        out[f"{prefix}_{idx}_NAME"] = row["site_clean"]
         out[f"{prefix}_{idx}_VALUE"] = format_percent(row["metric"])
 
     return out
@@ -806,6 +815,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped["ADDED_VALUE_IMPRESSIONS"] = None
 
     mapped["CLIENT_NAME"] = client_name
+    mapped["CLIENT"] = client_name
     mapped["CAMPAIGN_FORMATS"] = join_dimension_values(format_df, "format") if format_df is not None else None
     mapped["CAMPAIGN_MARKETS"] = join_dimension_values(geo_df, "geo") if geo_df is not None else None
     mapped["LIVE_DATES_SHORT"] = format_date_short(start_dt, end_dt)
