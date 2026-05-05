@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.1.0-hybrid-refinement"
+APP_VERSION = "10.1.1-hybrid-polish"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
@@ -74,6 +74,68 @@ def clean_dimension_label(value: Any) -> str:
     value = re.sub(r"\s+-\s+-\s+", " - ", value)
     value = re.sub(r"\s{2,}", " ", value)
     return value.strip(" -")
+
+
+MARKET_CODE_MAP = {
+    "france": "FR", "french": "FR", "fr": "FR",
+    "united kingdom": "UK", "uk": "UK", "gb": "UK", "great britain": "UK", "britain": "UK",
+    "italy": "IT", "italian": "IT", "it": "IT",
+    "spain": "ES", "spanish": "ES", "es": "ES",
+    "germany": "DE", "german": "DE", "de": "DE",
+    "netherlands": "NL", "dutch": "NL", "nl": "NL",
+    "belgium": "BE", "be": "BE",
+    "switzerland": "CH", "ch": "CH",
+    "austria": "AT", "at": "AT",
+    "portugal": "PT", "pt": "PT",
+    "ireland": "IE", "ie": "IE",
+    "usa": "US", "us": "US", "united states": "US", "united states of america": "US",
+    "canada": "CA", "ca": "CA",
+    "australia": "AU", "au": "AU",
+    "japan": "JP", "jp": "JP",
+    "hong kong": "HK", "hk": "HK",
+    "singapore": "SG", "sg": "SG",
+    "thailand": "TH", "thai": "TH", "th": "TH",
+    "taiwan": "TW", "tw": "TW",
+    "china": "CN", "cn": "CN",
+    "korea": "KR", "south korea": "KR", "kr": "KR",
+    "india": "IN", "in": "IN",
+    "mexico": "MX", "mx": "MX",
+    "brazil": "BR", "br": "BR",
+}
+
+
+def normalise_market_label(value: Any) -> str:
+    raw = clean_dimension_label(value)
+    if not raw:
+        return ""
+
+    raw = re.sub(r"\b(total|totals|overall|summary|market|markets|country|countries)\b", "", raw, flags=re.IGNORECASE)
+    raw = raw.strip(" ,-")
+
+    if not raw:
+        return ""
+
+    parts = re.split(r"[,;/|]+", raw)
+    out = []
+
+    for part in parts:
+        part = clean_text(part).strip(" -")
+        if not part:
+            continue
+
+        key = part.lower()
+        code = MARKET_CODE_MAP.get(key)
+
+        if not code:
+            if re.fullmatch(r"[A-Za-z]{2,3}", part):
+                code = part.upper()
+            else:
+                code = part.upper() if len(part) <= 3 else part
+
+        if code and code not in out:
+            out.append(code)
+
+    return ", ".join(out)
 
 
 def normalize_text(value: Any) -> str:
@@ -631,7 +693,17 @@ def join_dimension_values(df: pd.DataFrame, dim_key: str) -> Optional[str]:
     if isinstance(col_data, pd.DataFrame):
         col_data = col_data.iloc[:, 0]
 
-    raw_vals = [clean_dimension_label(v) for v in col_data.tolist() if clean_dimension_label(v)]
+    if dim_key == "geo":
+        raw_vals = []
+        for v in col_data.tolist():
+            cleaned = normalise_market_label(v)
+            if cleaned:
+                raw_vals.extend([x.strip() for x in cleaned.split(",") if x.strip()])
+    else:
+        raw_vals = [clean_dimension_label(v) for v in col_data.tolist() if clean_dimension_label(v)]
+
+    blocked = {"total", "totals", "overall", "summary", "campaign", "format", "formats", "market", "markets"}
+    raw_vals = [v for v in raw_vals if normalize_header(v) not in blocked]
 
     if not raw_vals:
         return None
@@ -640,22 +712,26 @@ def join_dimension_values(df: pd.DataFrame, dim_key: str) -> Optional[str]:
     cleaned = [base]
 
     for val in raw_vals[1:]:
-        parts_base = base.split(" - ")
-        parts_val = val.split(" - ")
-
-        suffix = parts_val
-
-        for i in range(min(len(parts_base), len(parts_val))):
-            if parts_base[i] != parts_val[i]:
-                suffix = parts_val[i:]
-                break
+        if dim_key == "geo":
+            candidate = val
         else:
-            if len(parts_val) > len(parts_base):
-                suffix = parts_val[len(parts_base):]
-            else:
-                suffix = [val]
+            parts_base = base.split(" - ")
+            parts_val = val.split(" - ")
 
-        candidate = clean_dimension_label(" - ".join([p for p in suffix if p]))
+            suffix = parts_val
+
+            for i in range(min(len(parts_base), len(parts_val))):
+                if parts_base[i] != parts_val[i]:
+                    suffix = parts_val[i:]
+                    break
+            else:
+                if len(parts_val) > len(parts_base):
+                    suffix = parts_val[len(parts_base):]
+                else:
+                    suffix = [val]
+
+            candidate = clean_dimension_label(" - ".join([p for p in suffix if p]))
+
         if candidate:
             cleaned.append(candidate)
 
