@@ -16,8 +16,10 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.1.2-hybrid-polish-na"
-MISSING_VALUE = "N/A (not specified in source file)"
+APP_VERSION = "10.1.3-hybrid-polish-na-split"
+
+MISSING_PPT_VALUE = "N/A"
+MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
@@ -77,11 +79,21 @@ def clean_dimension_label(value: Any) -> str:
     return value.strip(" -")
 
 
-def fill_missing_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
+def fill_missing_for_ppt(mapped: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in mapped.items():
         if value is None or clean_text(value) == "":
-            mapped[key] = MISSING_VALUE
+            mapped[key] = MISSING_PPT_VALUE
     return mapped
+
+
+def build_display_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    display = {}
+    for key, value in mapped.items():
+        if value == MISSING_PPT_VALUE:
+            display[key] = MISSING_DISPLAY_VALUE
+        else:
+            display[key] = value
+    return display
 
 
 MARKET_CODE_MAP = {
@@ -117,7 +129,12 @@ def normalise_market_label(value: Any) -> str:
     if not raw:
         return ""
 
-    raw = re.sub(r"\b(total|totals|overall|summary|market|markets|country|countries)\b", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(
+        r"\b(total|totals|overall|summary|market|markets|country|countries)\b",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    )
     raw = raw.strip(" ,-")
 
     if not raw:
@@ -779,7 +796,7 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
         "site", "publisher", "domain", "environment", "property",
         "placement", "title", "inventory", "app", "website",
         "total", "totals", "overall", "average", "avg", "summary",
-        "campaign", "campaign name", "market", "format", "creative"
+        "campaign", "campaign name", "market", "format", "creative",
     }
 
     temp = temp[~temp["site_norm"].isin(blocked_exact)]
@@ -817,21 +834,21 @@ def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
 
     missing_required = [
         k for k in required_core
-        if not mapped.get(k) or mapped.get(k) == MISSING_VALUE
+        if not mapped.get(k) or mapped.get(k) == MISSING_PPT_VALUE
     ]
 
     warnings = []
-    if mapped.get("CLIENT_NAME") == MISSING_VALUE:
+    if mapped.get("CLIENT_NAME") == MISSING_PPT_VALUE:
         warnings.append("CLIENT_NAME missing")
-    if mapped.get("CAMPAIGN_MARKETS") == MISSING_VALUE:
+    if mapped.get("CAMPAIGN_MARKETS") == MISSING_PPT_VALUE:
         warnings.append("CAMPAIGN_MARKETS missing")
-    if mapped.get("CAMPAIGN_FORMATS") == MISSING_VALUE:
+    if mapped.get("CAMPAIGN_FORMATS") == MISSING_PPT_VALUE:
         warnings.append("CAMPAIGN_FORMATS missing")
-    if mapped.get("TOP_TITLES_CTR_1_NAME") == MISSING_VALUE:
+    if mapped.get("TOP_TITLES_CTR_1_NAME") == MISSING_PPT_VALUE:
         warnings.append("Top Titles CTR missing")
-    if mapped.get("TOP_TITLES_VCR_1_NAME") == MISSING_VALUE:
+    if mapped.get("TOP_TITLES_VCR_1_NAME") == MISSING_PPT_VALUE:
         warnings.append("Top Titles VCR missing")
-    if mapped.get("TOP_TITLES_ER_1_NAME") == MISSING_VALUE:
+    if mapped.get("TOP_TITLES_ER_1_NAME") == MISSING_PPT_VALUE:
         warnings.append("Top Titles ER missing")
 
     return {
@@ -919,7 +936,8 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
             mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
             mapped.setdefault(f"{metric_prefix}_{i}_VALUE", None)
 
-    mapped = fill_missing_mapped_values(mapped)
+    mapped = fill_missing_for_ppt(mapped)
+    display_values = build_display_values(mapped)
     validation = validate_mapped_values(mapped)
 
     diagnostics = {
@@ -931,6 +949,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
 
     return {
         "mapped_values": mapped,
+        "display_values": display_values,
         "validation": validation,
         "diagnostics": diagnostics,
     }
