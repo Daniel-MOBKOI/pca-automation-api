@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.1.1-hybrid-polish"
+APP_VERSION = "10.1.2-hybrid-polish-na"
+MISSING_VALUE = "N/A (not specified in source file)"
 
 app = FastAPI(title="PCA Automation API", version=APP_VERSION)
 
@@ -74,6 +75,13 @@ def clean_dimension_label(value: Any) -> str:
     value = re.sub(r"\s+-\s+-\s+", " - ", value)
     value = re.sub(r"\s{2,}", " ", value)
     return value.strip(" -")
+
+
+def fill_missing_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    for key, value in mapped.items():
+        if value is None or clean_text(value) == "":
+            mapped[key] = MISSING_VALUE
+    return mapped
 
 
 MARKET_CODE_MAP = {
@@ -807,20 +815,23 @@ def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
         "LIVE_DATES_FULL",
     ]
 
-    missing_required = [k for k in required_core if not mapped.get(k)]
+    missing_required = [
+        k for k in required_core
+        if not mapped.get(k) or mapped.get(k) == MISSING_VALUE
+    ]
 
     warnings = []
-    if not mapped.get("CLIENT_NAME"):
+    if mapped.get("CLIENT_NAME") == MISSING_VALUE:
         warnings.append("CLIENT_NAME missing")
-    if not mapped.get("CAMPAIGN_MARKETS"):
+    if mapped.get("CAMPAIGN_MARKETS") == MISSING_VALUE:
         warnings.append("CAMPAIGN_MARKETS missing")
-    if not mapped.get("CAMPAIGN_FORMATS"):
+    if mapped.get("CAMPAIGN_FORMATS") == MISSING_VALUE:
         warnings.append("CAMPAIGN_FORMATS missing")
-    if not mapped.get("TOP_TITLES_CTR_1_NAME"):
+    if mapped.get("TOP_TITLES_CTR_1_NAME") == MISSING_VALUE:
         warnings.append("Top Titles CTR missing")
-    if not mapped.get("TOP_TITLES_VCR_1_NAME"):
+    if mapped.get("TOP_TITLES_VCR_1_NAME") == MISSING_VALUE:
         warnings.append("Top Titles VCR missing")
-    if not mapped.get("TOP_TITLES_ER_1_NAME"):
+    if mapped.get("TOP_TITLES_ER_1_NAME") == MISSING_VALUE:
         warnings.append("Top Titles ER missing")
 
     return {
@@ -908,6 +919,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
             mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
             mapped.setdefault(f"{metric_prefix}_{i}_VALUE", None)
 
+    mapped = fill_missing_mapped_values(mapped)
     validation = validate_mapped_values(mapped)
 
     diagnostics = {
@@ -952,7 +964,7 @@ def replace_text(text: str, data: dict) -> str:
         return text
 
     for key, value in data.items():
-        text = text.replace(f"{{{{{key}}}}}", "" if value is None else str(value))
+        text = text.replace(f"{{{{{key}}}}}", str(value))
 
     return text
 
