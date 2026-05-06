@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.1.3-hybrid-polish-na-split"
+APP_VERSION = "10.2.0-exec-summary-injection"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -42,6 +42,7 @@ class OpenAIFileRef(BaseModel):
 
 class FileRefsPayload(BaseModel):
     openaiFileIdRefs: List[OpenAIFileRef] = Field(...)
+    exec_summary: Optional[str] = None
 
 
 @app.get("/health")
@@ -1069,6 +1070,8 @@ async def generate_exec_summary(payload: FileRefsPayload):
 
             result = build_mapped_values(sheets, filename=eoc_path.name)
             mapped_data = result["mapped_values"]
+
+            mapped_data["EXEC_SUMMARY"] = payload.exec_summary or "N/A"
 
             campaign_name = safe_filename(mapped_data.get("CAMPAIGN_NAME") or "Campaign")
             filename = f"Exec Summary_PCA One Pager_{campaign_name}.pptx"
