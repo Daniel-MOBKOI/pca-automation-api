@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.4.0-one-pager-variations"
+APP_VERSION = "10.4.1-one-pager-template-builder"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -86,6 +86,14 @@ def clean_text(value: Any) -> str:
     except Exception:
         pass
     return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def normalize_header(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
+
+
+def normalize_key(value: Any) -> str:
+    return normalize_header(value).replace(" ", "_")
 
 
 def clean_dimension_label(value: Any) -> str:
@@ -186,10 +194,6 @@ def normalise_market_label(value: Any) -> str:
 
 def normalize_text(value: Any) -> str:
     return re.sub(r"[^a-z0-9%./()\- ]+", " ", clean_text(value).lower()).strip()
-
-
-def normalize_header(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
 
 
 def safe_number(value: Any) -> Optional[float]:
@@ -349,20 +353,93 @@ def load_template_registry() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Could not read template registry: {exc}")
 
 
-def normalise_addons(addons: List[str]) -> List[str]:
-    return [normalize_header(addon).replace(" ", "_") for addon in addons if clean_text(addon)]
+BASE_TEMPLATE_ALIASES = {
+    "title_overview": "title_overview",
+    "title": "title_overview",
+    "standard": "title_overview",
+    "exec_summary": "title_overview",
+    "exec_summary_title_overview": "title_overview",
+
+    "market_overview": "market_overview",
+    "market": "market_overview",
+
+    "top_titles_market": "top_titles_market",
+    "top_titles_market_overview": "top_titles_market",
+    "top_titles_and_market_overview": "top_titles_market",
+
+    "creative_overview": "creative_overview",
+    "creative": "creative_overview",
+
+    "top_performing_creative": "top_performing_creative",
+    "top_creative": "top_performing_creative",
+}
 
 
-def addon_key_from_list(addons: List[str]) -> str:
-    cleaned = normalise_addons(addons)
+ADDON_ALIASES = {
+    "attention": "attention",
+    "attention_score": "attention",
+    "e": "attention",
+
+    "happydemics": "happydemics",
+    "brand_study_results_happydemics": "happydemics",
+    "brand_study_happydemics": "happydemics",
+    "f": "happydemics",
+
+    "lumen_results": "lumen_results",
+    "brand_study_results_lumen": "lumen_results",
+    "brand_study_lumen": "lumen_results",
+    "g": "lumen_results",
+
+    "lumen_learnings": "lumen_learnings",
+    "brand_study_learnings_recommendations_lumen": "lumen_learnings",
+    "brand_study_learnings_and_recommendations_lumen": "lumen_learnings",
+    "h": "lumen_learnings",
+
+    "learnings": "learnings",
+    "learnings_recommendations": "learnings",
+    "learnings_and_recommendations": "learnings",
+    "i": "learnings",
+}
+
+
+def canonical_base_key(value: Any) -> str:
+    key = normalize_key(value)
+    return BASE_TEMPLATE_ALIASES.get(key, key)
+
+
+def canonical_addon_key(value: Any) -> Optional[str]:
+    key = normalize_key(value)
+    if key in ["", "none", "standard", "no_addons", "no_add_ons"]:
+        return None
+    return ADDON_ALIASES.get(key, key)
+
+
+def canonical_addons(addons: List[str], registry: Dict[str, Any]) -> List[str]:
+    registry_addons = registry.get("addons", {})
+    registry_order = list(registry_addons.keys())
+    order_index = {key: idx for idx, key in enumerate(registry_order)}
+
+    cleaned = []
+    for addon in addons:
+        canonical = canonical_addon_key(addon)
+        if canonical and canonical not in cleaned:
+            cleaned.append(canonical)
+
+    cleaned.sort(key=lambda item: order_index.get(item, 999))
+    return cleaned
+
+
+def addon_key_from_list(addons: List[str], registry: Dict[str, Any]) -> str:
+    cleaned = canonical_addons(addons, registry)
     return "none" if not cleaned else "_".join(cleaned)
 
 
 def get_one_pager_template_from_registry(base_template: str, addons: List[str]) -> Tuple[Path, Dict[str, Any]]:
     registry = load_template_registry()
 
-    base_key = normalize_header(base_template).replace(" ", "_")
-    addon_key = addon_key_from_list(addons)
+    base_key = canonical_base_key(base_template)
+    canonical = canonical_addons(addons, registry)
+    addon_key = "none" if not canonical else "_".join(canonical)
 
     try:
         one_pager = registry["outputs"]["one_pager"]
@@ -370,12 +447,20 @@ def get_one_pager_template_from_registry(base_template: str, addons: List[str]) 
         base_config = one_pager["bases"][base_key]
         template_config = base_config["templates"][addon_key]
     except KeyError:
+        available_bases = list(registry.get("outputs", {}).get("one_pager", {}).get("bases", {}).keys())
+        available_templates = (
+            list(registry.get("outputs", {}).get("one_pager", {}).get("bases", {}).get(base_key, {}).get("templates", {}).keys())
+            if base_key in available_bases else []
+        )
         raise HTTPException(
             status_code=400,
             detail={
                 "message": "Selected One Pager template variation is not available in the registry.",
                 "base_template": base_key,
+                "addons": canonical,
                 "addon_key": addon_key,
+                "available_bases": available_bases,
+                "available_template_keys_for_base": available_templates,
                 "registry_file": str(TEMPLATE_REGISTRY_PATH),
             },
         )
@@ -389,7 +474,7 @@ def get_one_pager_template_from_registry(base_template: str, addons: List[str]) 
         "template_file": template_file,
         "template_path": str(template_path),
         "template_label": template_config.get("label", addon_key),
-        "addons": template_config.get("addons", []),
+        "addons": template_config.get("addons", canonical),
         "addon_codes": template_config.get("addon_codes", ""),
     }
 
