@@ -1,0 +1,207 @@
+{
+  "version": "10.4.0-one-pager-variations",
+  "description": "PCA Automation One Pager Template Registry - Title Overview Initial 16 Template Build",
+  "outputs": {
+    "one_pager": {
+      "folder": "templates/one_pager/",
+      "bases": {
+        "title_overview": {
+          "label": "Exec Summary - Title Overview",
+          "description": "Standard Exec Summary title overview template with optional add-on sections.",
+          "templates": {
+            "none": {
+              "label": "Standard",
+              "addon_codes": "",
+              "file": "title_overview.pptx",
+              "path": "templates/one_pager/title_overview.pptx",
+              "addons": [],
+              "status": "active"
+            },
+            "attention": {
+              "label": "Attention Score",
+              "addon_codes": "E",
+              "file": "title_overview__attention.pptx",
+              "path": "templates/one_pager/title_overview__attention.pptx",
+              "addons": [
+                "attention"
+              ],
+              "status": "active"
+            },
+            "happydemics": {
+              "label": "Brand Study Results - Happydemics",
+              "addon_codes": "F",
+              "file": "title_overview__happydemics.pptx",
+              "path": "templates/one_pager/title_overview__happydemics.pptx",
+              "addons": [
+                "happydemics"
+              ],
+              "status": "active"
+            },
+            "lumen_results": {
+              "label": "Brand Study Results - Lumen",
+              "addon_codes": "G",
+              "file": "title_overview__lumen_results.pptx",
+              "path": "templates/one_pager/title_overview__lumen_results.pptx",
+              "addons": [
+                "lumen_results"
+              ],
+              "status": "active"
+            },
+            "lumen_learnings": {
+              "label": "Brand Study Learnings & Recommendations - Lumen",
+              "addon_codes": "H",
+              "file": "title_overview__lumen_learnings.pptx",
+              "path": "templates/one_pager/title_overview__lumen_learnings.pptx",
+              "addons": [
+                "lumen_learnings"
+              ],
+              "status": "active"
+            },
+            "learnings": {
+              "label": "Learnings & Recommendations",
+              "addon_codes": "I",
+              "file": "title_overview__learnings.pptx",
+              "path": "templates/one_pager/title_overview__learnings.pptx",
+              "addons": [
+                "learnings"
+              ],
+              "status": "active"
+            },
+            "attention_happydemics": {
+              "label": "Attention Score + Brand Study Results - Happydemics",
+              "addon_codes": "E + F",
+              "file": "title_overview__attention_happydemics.pptx",
+              "path": "templates/one_pager/title_overview__attention_happydemics.pptx",
+              "addons": [
+                "attention",
+                "happydemics"
+              ],
+              "status": "active"
+            },
+            "attention_lumen_results": {
+              "label": "Attention Score + Brand Study Results - Lumen",
+              "addon_codes": "E + G",
+              "file": "title_overview__attention_lumen_results.pptx",
+              "path": "templates/one_pager/title_overview__attention_lumen_results.pptx",
+              "addons": [
+                "attention",
+                "lumen_results"
+              ],
+              "status": "active"
+            },
+            "attention_lumen_learnings": {
+              "label": "Attention Score + Brand Study Learnings & Recommendations - Lumen",
+              "addon_codes": "E + H",
+              "file": "title_overview__attention_lumen_learnings.pptx",
+              "path": "templates/one_pager/title_overview__attention_lumen_learnings.pptx",
+              "addons": [
+                "attention",
+                "lumen_learnings"
+              ],
+              "status": "active"
+            },
+            "attention_learnings": {
+              "label": "Attention Score + Learnings & Recommendations",
+              "addon_codes": "E + I",
+              "file": "title_overview__attention_learnings.pptx",
+              "path": "templates/one_pager/title_overview__attention_learnings.pptx",
+              "addons": [
+                "attention",
+                "learnings"
+              ],
+              "status": "active"
+            },
+            "happydemics_lumen_results": {
+              "label": "Brand Study Results - Happydemics + Brand Study Results - Lumen",
+              "addon_codes": "F + G",
+              "file": "title_overview__happydemics_lumen_results.pptx",
+              "path": "templates/one_pager/title_overview__happydemics_lumen_results.pptx",
+              "addons": [
+                "happydemics",
+                "lumen_results"
+              ],
+              "status": "active"
+            },
+            "happydemics_lumen_learnings": {
+              "label": "Brand Study Results - Happydemics + Brand Study Learnings & Recommendations - Lumen",
+              "addon_codes": "F + H",
+              "file": "title_overview__happydemics_lumen_learnings.pptx",
+              "path": "templates/one_pager/title_overview__happydemics_lumen_learnings.pptx",
+              "addons": [
+                "happydemics",
+                "lumen_learnings"
+              ],
+              "status": "active"
+            },
+            "happydemics_learnings": {
+              "label": "Brand Study Results - Happydemics + Learnings & Recommendations",
+              "addon_codes": "F + I",
+              "file": "title_overview__happydemics_learnings.pptx",
+              "path": "templates/one_pager/title_overview__happydemics_learnings.pptx",
+              "addons": [
+                "happydemics",
+                "learnings"
+              ],
+              "status": "active"
+            },
+            "lumen_results_lumen_learnings": {
+              "label": "Brand Study Results - Lumen + Brand Study Learnings & Recommendations - Lumen",
+              "addon_codes": "G + H",
+              "file": "title_overview__lumen_results_lumen_learnings.pptx",
+              "path": "templates/one_pager/title_overview__lumen_results_lumen_learnings.pptx",
+              "addons": [
+                "lumen_results",
+                "lumen_learnings"
+              ],
+              "status": "active"
+            },
+            "lumen_results_learnings": {
+              "label": "Brand Study Results - Lumen + Learnings & Recommendations",
+              "addon_codes": "G + I",
+              "file": "title_overview__lumen_results_learnings.pptx",
+              "path": "templates/one_pager/title_overview__lumen_results_learnings.pptx",
+              "addons": [
+                "lumen_results",
+                "learnings"
+              ],
+              "status": "active"
+            },
+            "lumen_learnings_learnings": {
+              "label": "Brand Study Learnings & Recommendations - Lumen + Learnings & Recommendations",
+              "addon_codes": "H + I",
+              "file": "title_overview__lumen_learnings_learnings.pptx",
+              "path": "templates/one_pager/title_overview__lumen_learnings_learnings.pptx",
+              "addons": [
+                "lumen_learnings",
+                "learnings"
+              ],
+              "status": "active"
+            }
+          }
+        }
+      }
+    }
+  },
+  "addons": {
+    "attention": {
+      "code": "E",
+      "label": "Attention Score"
+    },
+    "happydemics": {
+      "code": "F",
+      "label": "Brand Study Results - Happydemics"
+    },
+    "lumen_results": {
+      "code": "G",
+      "label": "Brand Study Results - Lumen"
+    },
+    "lumen_learnings": {
+      "code": "H",
+      "label": "Brand Study Learnings & Recommendations - Lumen"
+    },
+    "learnings": {
+      "code": "I",
+      "label": "Learnings & Recommendations"
+    }
+  }
+}
