@@ -1185,15 +1185,22 @@ def safe_filename(value: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", value)
 
 
-def build_variation_filename(mapped_data: Dict[str, Any], variation_meta: Dict[str, Any]) -> str:
+def output_date_stamp() -> str:
+    return datetime.now().strftime("%d%m%Y")
+
+
+def build_one_pager_filename(mapped_data: Dict[str, Any]) -> str:
     campaign_name = safe_filename(mapped_data.get("CAMPAIGN_NAME") or "Campaign")
-    addon_codes = clean_text(variation_meta.get("addon_codes", ""))
+    return f"PCA One Pager_{campaign_name}_{output_date_stamp()}.pptx"
 
-    if addon_codes:
-        suffix = addon_codes.replace(" + ", "+").replace(" ", "")
-        return f"Exec Summary_PCA One Pager_{suffix}_{campaign_name}.pptx"
 
-    return f"Exec Summary_PCA One Pager_{campaign_name}.pptx"
+def build_slide_filename(mapped_data: Dict[str, Any]) -> str:
+    campaign_name = safe_filename(mapped_data.get("CAMPAIGN_NAME") or "Campaign")
+    return f"PCA Slides_{campaign_name}_{output_date_stamp()}.pptx"
+
+
+def build_variation_filename(mapped_data: Dict[str, Any], variation_meta: Dict[str, Any]) -> str:
+    return build_one_pager_filename(mapped_data)
 
 
 @app.get("/template-registry")
@@ -1255,8 +1262,7 @@ async def generate_exec_summary(payload: FileRefsPayload):
 
             mapped_data["EXEC_SUMMARY"] = payload.exec_summary or "N/A"
 
-            campaign_name = safe_filename(mapped_data.get("CAMPAIGN_NAME") or "Campaign")
-            filename = f"Exec Summary_PCA One Pager_{campaign_name}.pptx"
+            filename = build_one_pager_filename(mapped_data)
             output_path = tmp_dir / filename
 
             generate_ppt_from_template(TEMPLATE_PATH, output_path, mapped_data)
@@ -1309,8 +1315,7 @@ async def generate_slide_deck(payload: FileRefsPayload):
 
             mapped_data["EXEC_SUMMARY"] = payload.exec_summary or "N/A"
 
-            campaign_name = safe_filename(mapped_data.get("CAMPAIGN_NAME") or "Campaign")
-            filename = f"Exec Summary_PCA Slides_{campaign_name}.pptx"
+            filename = build_slide_filename(mapped_data)
             output_path = tmp_dir / filename
 
             generate_ppt_from_template(SLIDE_DECK_TEMPLATE_PATH, output_path, mapped_data)
