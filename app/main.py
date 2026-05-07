@@ -1,4 +1,5 @@
 import base64
+import json
 import math
 import os
 import re
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "10.3.0-slide-deck"
+APP_VERSION = "10.4.0-one-pager-variations"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -29,6 +30,13 @@ ROOT_DIR = BASE_DIR.parent
 TEMPLATE_PATH = Path(os.getenv("TEMPLATE_PATH", ROOT_DIR / "templates" / "exec_summary_master.pptx"))
 SLIDE_DECK_TEMPLATE_PATH = Path(os.getenv("SLIDE_DECK_TEMPLATE_PATH", ROOT_DIR / "templates" / "exec_summary_slide_deck_master.pptx"))
 RULES_MASTER_PATH = Path(os.getenv("RULES_MASTER_PATH", ROOT_DIR / "assets" / "PCA_GPT_Rules_Master.xlsx"))
+
+TEMPLATE_REGISTRY_PATH = Path(
+    os.getenv(
+        "TEMPLATE_REGISTRY_PATH",
+        ROOT_DIR / "assets" / "template_registry_title_overview_initial_16.json",
+    )
+)
 
 PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 MAX_RETURN_FILE_BYTES = 10 * 1024 * 1024
@@ -46,6 +54,13 @@ class FileRefsPayload(BaseModel):
     exec_summary: Optional[str] = None
 
 
+class OnePagerVariationPayload(BaseModel):
+    openaiFileIdRefs: List[OpenAIFileRef] = Field(...)
+    exec_summary: Optional[str] = None
+    base_template: str = Field("title_overview")
+    addons: List[str] = Field(default_factory=list)
+
+
 @app.get("/health")
 def health():
     return {
@@ -57,6 +72,8 @@ def health():
         "slide_deck_template_path": str(SLIDE_DECK_TEMPLATE_PATH),
         "rules_master_exists": RULES_MASTER_PATH.exists(),
         "rules_master_path": str(RULES_MASTER_PATH),
+        "template_registry_exists": TEMPLATE_REGISTRY_PATH.exists(),
+        "template_registry_path": str(TEMPLATE_REGISTRY_PATH),
     }
 
 
@@ -320,6 +337,61 @@ def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
         return out
     except Exception:
         return None
+
+
+def load_template_registry() -> Dict[str, Any]:
+    if not TEMPLATE_REGISTRY_PATH.exists():
+        raise HTTPException(status_code=500, detail=f"Template registry not found at {TEMPLATE_REGISTRY_PATH}")
+
+    try:
+        return json.loads(TEMPLATE_REGISTRY_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read template registry: {exc}")
+
+
+def normalise_addons(addons: List[str]) -> List[str]:
+    return [normalize_header(addon).replace(" ", "_") for addon in addons if clean_text(addon)]
+
+
+def addon_key_from_list(addons: List[str]) -> str:
+    cleaned = normalise_addons(addons)
+    return "none" if not cleaned else "_".join(cleaned)
+
+
+def get_one_pager_template_from_registry(base_template: str, addons: List[str]) -> Tuple[Path, Dict[str, Any]]:
+    registry = load_template_registry()
+
+    base_key = normalize_header(base_template).replace(" ", "_")
+    addon_key = addon_key_from_list(addons)
+
+    try:
+        one_pager = registry["outputs"]["one_pager"]
+        folder = one_pager.get("folder", "templates/one_pager/")
+        base_config = one_pager["bases"][base_key]
+        template_config = base_config["templates"][addon_key]
+    except KeyError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Selected One Pager template variation is not available in the registry.",
+                "base_template": base_key,
+                "addon_key": addon_key,
+                "registry_file": str(TEMPLATE_REGISTRY_PATH),
+            },
+        )
+
+    template_file = template_config["file"]
+    template_path = ROOT_DIR / folder / template_file
+
+    return template_path, {
+        "base_key": base_key,
+        "addon_key": addon_key,
+        "template_file": template_file,
+        "template_path": str(template_path),
+        "template_label": template_config.get("label", addon_key),
+        "addons": template_config.get("addons", []),
+        "addon_codes": template_config.get("addon_codes", ""),
+    }
 
 
 ALIASES = {
@@ -1028,6 +1100,28 @@ def safe_filename(value: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", value)
 
 
+def build_variation_filename(mapped_data: Dict[str, Any], variation_meta: Dict[str, Any]) -> str:
+    campaign_name = safe_filename(mapped_data.get("CAMPAIGN_NAME") or "Campaign")
+    addon_codes = clean_text(variation_meta.get("addon_codes", ""))
+
+    if addon_codes:
+        suffix = addon_codes.replace(" + ", "+").replace(" ", "")
+        return f"Exec Summary_PCA One Pager_{suffix}_{campaign_name}.pptx"
+
+    return f"Exec Summary_PCA One Pager_{campaign_name}.pptx"
+
+
+@app.get("/template-registry")
+def template_registry():
+    registry = load_template_registry()
+    return {
+        "status": "success",
+        "version": APP_VERSION,
+        "registry_file": str(TEMPLATE_REGISTRY_PATH),
+        "registry": registry,
+    }
+
+
 @app.post("/validate-eoc")
 async def validate_eoc(payload: FileRefsPayload):
     try:
@@ -1144,6 +1238,66 @@ async def generate_slide_deck(payload: FileRefsPayload):
         return {
             "status": "success",
             "version": APP_VERSION,
+            "summary": result,
+            "openaiFileResponse": [
+                {
+                    "name": filename,
+                    "mime_type": PPTX_MIME,
+                    "content": encoded,
+                }
+            ],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "trace": traceback.format_exc(),
+                "version": APP_VERSION,
+            },
+        )
+
+
+@app.post("/generate-one-pager-variation")
+async def generate_one_pager_variation(payload: OnePagerVariationPayload):
+    try:
+        if not payload.openaiFileIdRefs:
+            raise HTTPException(status_code=400, detail="No EOC file supplied.")
+
+        template_path, variation_meta = get_one_pager_template_from_registry(
+            payload.base_template,
+            payload.addons,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+
+            eoc_path = await download_openai_file(payload.openaiFileIdRefs[0], tmp_dir)
+            sheets = read_uploaded_eoc(eoc_path)
+
+            result = build_mapped_values(sheets, filename=eoc_path.name)
+            mapped_data = result["mapped_values"]
+
+            mapped_data["EXEC_SUMMARY"] = payload.exec_summary or "N/A"
+
+            filename = build_variation_filename(mapped_data, variation_meta)
+            output_path = tmp_dir / filename
+
+            generate_ppt_from_template(template_path, output_path, mapped_data)
+
+            if output_path.stat().st_size > MAX_RETURN_FILE_BYTES:
+                raise HTTPException(status_code=413, detail="Generated PPT is over 10MB. Reduce template media size.")
+
+            encoded = base64.b64encode(output_path.read_bytes()).decode("utf-8")
+
+        return {
+            "status": "success",
+            "version": APP_VERSION,
+            "output_type": "one_pager_variation",
+            "variation": variation_meta,
             "summary": result,
             "openaiFileResponse": [
                 {
