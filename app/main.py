@@ -983,6 +983,56 @@ def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> 
     return out
 
 
+def extract_top_markets(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> Dict[str, Any]:
+    geo_col = find_col(df, "geo")
+    metric_col = find_col(df, metric_key)
+
+    if not geo_col or not metric_col:
+        return {}
+
+    geo_data = df[geo_col]
+    if isinstance(geo_data, pd.DataFrame):
+        geo_data = geo_data.iloc[:, 0]
+
+    metric_data = df[metric_col]
+    if isinstance(metric_data, pd.DataFrame):
+        metric_data = metric_data.iloc[:, 0]
+
+    temp = pd.DataFrame({"market": geo_data, "metric": metric_data})
+    temp["market_clean"] = temp["market"].apply(normalise_market_label)
+    temp["market_norm"] = temp["market_clean"].apply(lambda x: normalize_header(x))
+    temp["metric"] = temp["metric"].apply(safe_number)
+    temp = temp.dropna(subset=["metric"])
+
+    blocked_exact = {
+        "geo", "market", "markets", "country", "countries", "region",
+        "territory", "location", "locale", "total", "totals", "overall",
+        "average", "avg", "summary", "campaign", "campaign name",
+    }
+
+    temp = temp[~temp["market_norm"].isin(blocked_exact)]
+    temp = temp[temp["market_clean"] != ""]
+
+    if temp.empty:
+        return {}
+
+    temp = temp.sort_values(by="metric", ascending=False).head(max_rank)
+
+    prefix = {
+        "ctr": "TOP_MARKETS_CTR",
+        "engagement_rate": "TOP_MARKETS_ER",
+        "vcr": "TOP_MARKETS_VCR",
+    }[metric_key]
+
+    out = {}
+
+    for idx, (_, row) in enumerate(temp.iterrows(), start=1):
+        out[f"{prefix}_{idx}_NAME"] = row["market_clean"]
+        out[f"{prefix}_{idx}_VALUE"] = format_percent(row["metric"])
+
+    return out
+
+
 def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
     required_core = [
         "CAMPAIGN_NAME",
@@ -1011,6 +1061,12 @@ def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
         warnings.append("Top Titles VCR missing")
     if mapped.get("TOP_TITLES_ER_1_NAME") == MISSING_PPT_VALUE:
         warnings.append("Top Titles ER missing")
+    if mapped.get("TOP_MARKETS_CTR_1_NAME") == MISSING_PPT_VALUE:
+        warnings.append("Top Markets CTR missing")
+    if mapped.get("TOP_MARKETS_VCR_1_NAME") == MISSING_PPT_VALUE:
+        warnings.append("Top Markets VCR missing")
+    if mapped.get("TOP_MARKETS_ER_1_NAME") == MISSING_PPT_VALUE:
+        warnings.append("Top Markets ER missing")
 
     return {
         "is_valid": len(missing_required) == 0,
@@ -1092,7 +1148,17 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped.update(extract_top_titles(site_df, "engagement_rate", 5))
         mapped.update(extract_top_titles(site_df, "vcr", 5))
 
+    if geo_df is not None:
+        mapped.update(extract_top_markets(geo_df, "ctr", 5))
+        mapped.update(extract_top_markets(geo_df, "engagement_rate", 5))
+        mapped.update(extract_top_markets(geo_df, "vcr", 5))
+
     for metric_prefix in ["TOP_TITLES_CTR", "TOP_TITLES_ER", "TOP_TITLES_VCR"]:
+        for i in range(1, 6):
+            mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
+            mapped.setdefault(f"{metric_prefix}_{i}_VALUE", None)
+
+    for metric_prefix in ["TOP_MARKETS_CTR", "TOP_MARKETS_ER", "TOP_MARKETS_VCR"]:
         for i in range(1, 6):
             mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
             mapped.setdefault(f"{metric_prefix}_{i}_VALUE", None)
