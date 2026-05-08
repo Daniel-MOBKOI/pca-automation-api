@@ -5,54 +5,46 @@ import tempfile
 import traceback
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "12.0.0-modular-builder-poc"
+APP_VERSION = "12.1.0-modular-stack-poc"
 
-app = FastAPI(
-    title="PCA Modular Builder API",
-    version=APP_VERSION
-)
+app = FastAPI(title="PCA Modular Builder API", version=APP_VERSION)
 
 BASE_DIR = Path(__file__).resolve().parent
 
 MODULAR_TEMPLATE_PATH = Path(
-    os.getenv(
-        "MODULAR_TEMPLATE_PATH",
-        BASE_DIR / "templates" / "modular_sections_master.pptx"
-    )
+    os.getenv("MODULAR_TEMPLATE_PATH", BASE_DIR / "templates" / "modular_sections_master.pptx")
 )
 
 SECTION_REGISTRY_PATH = Path(
-    os.getenv(
-        "SECTION_REGISTRY_PATH",
-        BASE_DIR / "section_registry" / "section_registry.json"
-    )
+    os.getenv("SECTION_REGISTRY_PATH", BASE_DIR / "section_registry" / "section_registry.json")
 )
+
+EMU_PER_PX = 9525
 
 
 class ModularOnePagerRequest(BaseModel):
-    selected_sections: List[str] = Field(
-        default_factory=list,
-        description="Selected SECTION_ID values, for example ['TITLE_PERFORMANCE', 'CREATIVE_OVERVIEW']"
-    )
-    placeholder_values: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Optional placeholder replacement values"
-    )
+    selected_sections: List[str] = Field(default_factory=list)
+    placeholder_values: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    top_margin_px: int = 100
+    bottom_margin_px: int = 100
+    section_spacing_px: int = 60
+    left_margin_px: int = 0
+
+
+def px_to_emu(px: int) -> int:
+    return int(px * EMU_PER_PX)
 
 
 def load_registry() -> Dict[str, Any]:
     if not SECTION_REGISTRY_PATH.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"Section registry not found at {SECTION_REGISTRY_PATH}"
-        )
+        raise HTTPException(status_code=500, detail=f"Section registry not found at {SECTION_REGISTRY_PATH}")
 
     with open(SECTION_REGISTRY_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -62,6 +54,10 @@ def get_shape_text(shape) -> str:
     if not hasattr(shape, "text"):
         return ""
     return shape.text or ""
+
+
+def is_section_id_shape(shape) -> bool:
+    return get_shape_text(shape).strip().startswith("SECTION_ID:")
 
 
 def extract_section_id_from_slide(slide) -> Optional[str]:
@@ -77,19 +73,14 @@ def detect_template_sections(prs: Presentation) -> Dict[str, int]:
 
     for index, slide in enumerate(prs.slides):
         section_id = extract_section_id_from_slide(slide)
-
         if section_id:
             detected[section_id] = index
 
     return detected
 
 
-def ordered_selected_sections(
-    registry: Dict[str, Any],
-    selected_sections: List[str]
-) -> List[str]:
+def ordered_selected_sections(registry: Dict[str, Any], selected_sections: List[str]) -> List[str]:
     selected_clean = [s.strip().upper() for s in selected_sections if s.strip()]
-
     final_sections = []
 
     for section_id, meta in registry.items():
@@ -100,14 +91,8 @@ def ordered_selected_sections(
         if section_id not in final_sections:
             final_sections.append(section_id)
 
-    final_sections = [
-        section_id for section_id in final_sections
-        if section_id in registry
-    ]
-
-    final_sections.sort(
-        key=lambda section_id: registry[section_id].get("default_order", 999)
-    )
+    final_sections = [section_id for section_id in final_sections if section_id in registry]
+    final_sections.sort(key=lambda section_id: registry[section_id].get("default_order", 999))
 
     return final_sections
 
@@ -116,9 +101,7 @@ def replace_text_in_shape(shape, placeholder_values: Dict[str, Any]) -> None:
     if not hasattr(shape, "text_frame"):
         return
 
-    text_frame = shape.text_frame
-
-    for paragraph in text_frame.paragraphs:
+    for paragraph in shape.text_frame.paragraphs:
         for run in paragraph.runs:
             if not run.text:
                 continue
@@ -141,40 +124,49 @@ def replace_placeholders_on_slide(slide, placeholder_values: Dict[str, Any]) -> 
         replace_text_in_shape(shape, placeholder_values)
 
 
-def clone_slide(source_prs: Presentation, output_prs: Presentation, source_slide_index: int):
-    source_slide = source_prs.slides[source_slide_index]
-    blank_layout = output_prs.slide_layouts[6]
-    new_slide = output_prs.slides.add_slide(blank_layout)
+def get_section_bbox(slide) -> Optional[Tuple[int, int, int, int]]:
+    shapes = [shape for shape in slide.shapes if not is_section_id_shape(shape)]
 
-    for shape in source_slide.shapes:
-        text = get_shape_text(shape).strip()
+    if not shapes:
+        return None
 
-        if text.startswith("SECTION_ID:"):
-            continue
+    min_left = min(shape.left for shape in shapes)
+    min_top = min(shape.top for shape in shapes)
+    max_right = max(shape.left + shape.width for shape in shapes)
+    max_bottom = max(shape.top + shape.height for shape in shapes)
 
-        new_el = deepcopy(shape.element)
-        new_slide.shapes._spTree.insert_element_before(new_el, "p:extLst")
-
-    return new_slide
+    return min_left, min_top, max_right, max_bottom
 
 
-def build_modular_ppt(
+def copy_shape_to_slide(source_shape, target_slide, new_left: int, new_top: int):
+    new_el = deepcopy(source_shape.element)
+    target_slide.shapes._spTree.insert_element_before(new_el, "p:extLst")
+
+    copied_shape = list(target_slide.shapes)[-1]
+
+    try:
+        copied_shape.left = new_left
+        copied_shape.top = new_top
+    except Exception:
+        pass
+
+    return copied_shape
+
+
+def build_stacked_modular_ppt(
     selected_sections: List[str],
-    placeholder_values: Optional[Dict[str, Any]] = None
+    placeholder_values: Optional[Dict[str, Any]] = None,
+    top_margin_px: int = 100,
+    bottom_margin_px: int = 100,
+    section_spacing_px: int = 60,
+    left_margin_px: int = 0
 ) -> Dict[str, Any]:
+
     if not MODULAR_TEMPLATE_PATH.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"Modular template not found at {MODULAR_TEMPLATE_PATH}"
-        )
+        raise HTTPException(status_code=500, detail=f"Modular template not found at {MODULAR_TEMPLATE_PATH}")
 
     registry = load_registry()
     source_prs = Presentation(str(MODULAR_TEMPLATE_PATH))
-
-    output_prs = Presentation()
-    output_prs.slide_width = source_prs.slide_width
-    output_prs.slide_height = source_prs.slide_height
-
     detected_sections = detect_template_sections(source_prs)
     sections_to_build = ordered_selected_sections(registry, selected_sections)
 
@@ -193,18 +185,70 @@ def build_modular_ppt(
             }
         )
 
-    built_sections = []
+    section_data = []
 
     for section_id in sections_to_build:
-        source_index = detected_sections[section_id]
-        new_slide = clone_slide(source_prs, output_prs, source_index)
-        replace_placeholders_on_slide(new_slide, placeholder_values or {})
+        source_slide = source_prs.slides[detected_sections[section_id]]
+        bbox = get_section_bbox(source_slide)
 
-        built_sections.append({
+        if not bbox:
+            continue
+
+        min_left, min_top, max_right, max_bottom = bbox
+        section_height = max_bottom - min_top
+
+        section_data.append({
             "section_id": section_id,
             "label": registry[section_id].get("label", section_id),
-            "source_slide_index": source_index
+            "slide": source_slide,
+            "bbox": bbox,
+            "height": section_height
         })
+
+    top_margin = px_to_emu(top_margin_px)
+    bottom_margin = px_to_emu(bottom_margin_px)
+    spacing = px_to_emu(section_spacing_px)
+    left_margin = px_to_emu(left_margin_px)
+
+    total_height = top_margin + bottom_margin
+
+    for i, section in enumerate(section_data):
+        total_height += section["height"]
+        if i < len(section_data) - 1:
+            total_height += spacing
+
+    output_prs = Presentation()
+    output_prs.slide_width = source_prs.slide_width
+    output_prs.slide_height = total_height
+
+    blank_layout = output_prs.slide_layouts[6]
+    output_slide = output_prs.slides.add_slide(blank_layout)
+
+    cursor_y = top_margin
+    built_sections = []
+
+    for section in section_data:
+        source_slide = section["slide"]
+        min_left, min_top, max_right, max_bottom = section["bbox"]
+
+        for shape in source_slide.shapes:
+            if is_section_id_shape(shape):
+                continue
+
+            new_left = left_margin + (shape.left - min_left)
+            new_top = cursor_y + (shape.top - min_top)
+
+            copy_shape_to_slide(shape, output_slide, new_left, new_top)
+
+        built_sections.append({
+            "section_id": section["section_id"],
+            "label": section["label"],
+            "height_emu": section["height"]
+        })
+
+        cursor_y += section["height"] + spacing
+
+    replace_placeholders_on_slide(output_slide, placeholder_values or {})
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
         output_path = tmp.name
@@ -217,10 +261,12 @@ def build_modular_ppt(
     os.remove(output_path)
 
     return {
-        "filename": "pca_modular_one_pager_v12.pptx",
+        "filename": "pca_modular_stacked_one_pager_v12.pptx",
         "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "file_base64": base64.b64encode(file_bytes).decode("utf-8"),
-        "built_sections": built_sections
+        "built_sections": built_sections,
+        "slide_height_emu": total_height,
+        "slide_height_px_approx": round(total_height / EMU_PER_PX)
     }
 
 
@@ -261,10 +307,7 @@ def list_modular_sections():
 @app.get("/detect-modular-template-sections")
 def detect_modular_template_sections():
     if not MODULAR_TEMPLATE_PATH.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=f"Modular template not found at {MODULAR_TEMPLATE_PATH}"
-        )
+        raise HTTPException(status_code=500, detail=f"Modular template not found at {MODULAR_TEMPLATE_PATH}")
 
     prs = Presentation(str(MODULAR_TEMPLATE_PATH))
     detected = detect_template_sections(prs)
@@ -276,12 +319,16 @@ def detect_modular_template_sections():
     }
 
 
-@app.post("/generate-modular-one-pager")
-def generate_modular_one_pager(request: ModularOnePagerRequest):
+@app.post("/generate-modular-one-pager-stacked")
+def generate_modular_one_pager_stacked(request: ModularOnePagerRequest):
     try:
-        return build_modular_ppt(
+        return build_stacked_modular_ppt(
             selected_sections=request.selected_sections,
-            placeholder_values=request.placeholder_values or {}
+            placeholder_values=request.placeholder_values or {},
+            top_margin_px=request.top_margin_px,
+            bottom_margin_px=request.bottom_margin_px,
+            section_spacing_px=request.section_spacing_px,
+            left_margin_px=request.left_margin_px
         )
 
     except HTTPException:
@@ -292,7 +339,7 @@ def generate_modular_one_pager(request: ModularOnePagerRequest):
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to generate modular one pager",
+                "message": "Failed to generate stacked modular one pager",
                 "error": str(e)
             }
         )
