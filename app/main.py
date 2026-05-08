@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "12.1.0-modular-stack-poc"
+APP_VERSION = "12.2.0-grouped-section-stack-poc"
 
 app = FastAPI(title="PCA Modular Builder API", version=APP_VERSION)
 
@@ -97,23 +97,52 @@ def ordered_selected_sections(registry: Dict[str, Any], selected_sections: List[
     return final_sections
 
 
+def find_main_group_shape(slide):
+    candidates = []
+
+    for shape in slide.shapes:
+        if is_section_id_shape(shape):
+            continue
+
+        is_group = shape.shape_type == 6  # GROUP
+        area = int(shape.width) * int(shape.height)
+
+        candidates.append({
+            "shape": shape,
+            "is_group": is_group,
+            "area": area
+        })
+
+    if not candidates:
+        return None
+
+    group_candidates = [c for c in candidates if c["is_group"]]
+
+    if group_candidates:
+        return max(group_candidates, key=lambda c: c["area"])["shape"]
+
+    return max(candidates, key=lambda c: c["area"])["shape"]
+
+
 def replace_text_in_shape(shape, placeholder_values: Dict[str, Any]) -> None:
-    if not hasattr(shape, "text_frame"):
-        return
+    if hasattr(shape, "text_frame"):
+        for paragraph in shape.text_frame.paragraphs:
+            for run in paragraph.runs:
+                if not run.text:
+                    continue
 
-    for paragraph in shape.text_frame.paragraphs:
-        for run in paragraph.runs:
-            if not run.text:
-                continue
+                new_text = run.text
 
-            new_text = run.text
+                for key, value in placeholder_values.items():
+                    placeholder = "{{" + str(key).strip("{}") + "}}"
+                    replacement = "N/A" if value is None else str(value)
+                    new_text = new_text.replace(placeholder, replacement)
 
-            for key, value in placeholder_values.items():
-                placeholder = "{{" + str(key).strip("{}") + "}}"
-                replacement = "N/A" if value is None else str(value)
-                new_text = new_text.replace(placeholder, replacement)
+                run.text = new_text
 
-            run.text = new_text
+    if hasattr(shape, "shapes"):
+        for subshape in shape.shapes:
+            replace_text_in_shape(subshape, placeholder_values)
 
 
 def replace_placeholders_on_slide(slide, placeholder_values: Dict[str, Any]) -> None:
@@ -124,21 +153,7 @@ def replace_placeholders_on_slide(slide, placeholder_values: Dict[str, Any]) -> 
         replace_text_in_shape(shape, placeholder_values)
 
 
-def get_section_bbox(slide) -> Optional[Tuple[int, int, int, int]]:
-    shapes = [shape for shape in slide.shapes if not is_section_id_shape(shape)]
-
-    if not shapes:
-        return None
-
-    min_left = min(shape.left for shape in shapes)
-    min_top = min(shape.top for shape in shapes)
-    max_right = max(shape.left + shape.width for shape in shapes)
-    max_bottom = max(shape.top + shape.height for shape in shapes)
-
-    return min_left, min_top, max_right, max_bottom
-
-
-def copy_shape_to_slide(source_shape, target_slide, new_left: int, new_top: int):
+def copy_group_to_slide(source_shape, target_slide, new_left: int, new_top: int):
     new_el = deepcopy(source_shape.element)
     target_slide.shapes._spTree.insert_element_before(new_el, "p:extLst")
 
@@ -153,7 +168,7 @@ def copy_shape_to_slide(source_shape, target_slide, new_left: int, new_top: int)
     return copied_shape
 
 
-def build_stacked_modular_ppt(
+def build_grouped_stacked_modular_ppt(
     selected_sections: List[str],
     placeholder_values: Optional[Dict[str, Any]] = None,
     top_margin_px: int = 100,
@@ -189,20 +204,19 @@ def build_stacked_modular_ppt(
 
     for section_id in sections_to_build:
         source_slide = source_prs.slides[detected_sections[section_id]]
-        bbox = get_section_bbox(source_slide)
+        group_shape = find_main_group_shape(source_slide)
 
-        if not bbox:
+        if group_shape is None:
             continue
-
-        min_left, min_top, max_right, max_bottom = bbox
-        section_height = max_bottom - min_top
 
         section_data.append({
             "section_id": section_id,
             "label": registry[section_id].get("label", section_id),
-            "slide": source_slide,
-            "bbox": bbox,
-            "height": section_height
+            "shape": group_shape,
+            "left": group_shape.left,
+            "top": group_shape.top,
+            "width": group_shape.width,
+            "height": group_shape.height
         })
 
     top_margin = px_to_emu(top_margin_px)
@@ -228,22 +242,18 @@ def build_stacked_modular_ppt(
     built_sections = []
 
     for section in section_data:
-        source_slide = section["slide"]
-        min_left, min_top, max_right, max_bottom = section["bbox"]
-
-        for shape in source_slide.shapes:
-            if is_section_id_shape(shape):
-                continue
-
-            new_left = left_margin + (shape.left - min_left)
-            new_top = cursor_y + (shape.top - min_top)
-
-            copy_shape_to_slide(shape, output_slide, new_left, new_top)
+        copied_shape = copy_group_to_slide(
+            section["shape"],
+            output_slide,
+            left_margin,
+            cursor_y
+        )
 
         built_sections.append({
             "section_id": section["section_id"],
             "label": section["label"],
-            "height_emu": section["height"]
+            "height_emu": section["height"],
+            "height_px_approx": round(section["height"] / EMU_PER_PX)
         })
 
         cursor_y += section["height"] + spacing
@@ -261,7 +271,7 @@ def build_stacked_modular_ppt(
     os.remove(output_path)
 
     return {
-        "filename": "pca_modular_stacked_one_pager_v12.pptx",
+        "filename": "pca_modular_grouped_stacked_one_pager_v12.pptx",
         "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "file_base64": base64.b64encode(file_bytes).decode("utf-8"),
         "built_sections": built_sections,
@@ -285,7 +295,6 @@ def health():
 @app.get("/list-modular-sections")
 def list_modular_sections():
     registry = load_registry()
-
     sections = []
 
     for section_id, meta in registry.items():
@@ -319,10 +328,39 @@ def detect_modular_template_sections():
     }
 
 
-@app.post("/generate-modular-one-pager-stacked")
-def generate_modular_one_pager_stacked(request: ModularOnePagerRequest):
+@app.get("/inspect-modular-groups")
+def inspect_modular_groups():
+    if not MODULAR_TEMPLATE_PATH.exists():
+        raise HTTPException(status_code=500, detail=f"Modular template not found at {MODULAR_TEMPLATE_PATH}")
+
+    prs = Presentation(str(MODULAR_TEMPLATE_PATH))
+    detected = detect_template_sections(prs)
+
+    results = []
+
+    for section_id, slide_index in detected.items():
+        slide = prs.slides[slide_index]
+        main_group = find_main_group_shape(slide)
+
+        results.append({
+            "section_id": section_id,
+            "slide_index": slide_index,
+            "main_shape_found": main_group is not None,
+            "main_shape_type": str(main_group.shape_type) if main_group else None,
+            "main_shape_width_px_approx": round(main_group.width / EMU_PER_PX) if main_group else None,
+            "main_shape_height_px_approx": round(main_group.height / EMU_PER_PX) if main_group else None
+        })
+
+    return {
+        "app_version": APP_VERSION,
+        "sections": results
+    }
+
+
+@app.post("/generate-modular-one-pager-grouped-stacked")
+def generate_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
     try:
-        return build_stacked_modular_ppt(
+        return build_grouped_stacked_modular_ppt(
             selected_sections=request.selected_sections,
             placeholder_values=request.placeholder_values or {},
             top_margin_px=request.top_margin_px,
@@ -339,7 +377,7 @@ def generate_modular_one_pager_stacked(request: ModularOnePagerRequest):
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to generate stacked modular one pager",
+                "message": "Failed to generate grouped stacked modular one pager",
                 "error": str(e)
             }
         )
