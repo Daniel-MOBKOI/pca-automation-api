@@ -1,14 +1,67 @@
 {
-  "title_overview": {
+  "TITLE_OVERVIEW": {
     "label": "Title Overview",
-    "slide_index": 0
+    "required": true,
+    "default_order": 1
   },
-  "top_titles_markets": {
+
+  "TITLE_PERFORMANCE": {
+    "label": "Title Performance",
+    "required": false,
+    "default_order": 2
+  },
+
+  "MARKET_PERFORMANCE": {
+    "label": "Market Performance",
+    "required": false,
+    "default_order": 3
+  },
+
+  "TOP_TITLES_MARKETS": {
     "label": "Top Titles & Markets",
-    "slide_index": 1
+    "required": false,
+    "default_order": 4
   },
-  "creative_overview": {
+
+  "CREATIVE_OVERVIEW": {
     "label": "Creative Overview",
-    "slide_index": 2
+    "required": false,
+    "default_order": 5
+  },
+
+  "CREATIVE_PERFORMANCE": {
+    "label": "Creative Performance",
+    "required": false,
+    "default_order": 6
+  },
+
+  "ATTENTION_SCORE": {
+    "label": "Attention Score",
+    "required": false,
+    "default_order": 7
+  },
+
+  "HAPPYDEMICS": {
+    "label": "Happydemics",
+    "required": false,
+    "default_order": 8
+  },
+
+  "LUMEN_RESULTS": {
+    "label": "Lumen Results",
+    "required": false,
+    "default_order": 9
+  },
+
+  "BRAND_STUDY": {
+    "label": "Brand Study",
+    "required": false,
+    "default_order": 10
+  },
+
+  "LEARNING_RECOMMENDATIONS": {
+    "label": "Learning Recommendations",
+    "required": false,
+    "default_order": 11
   }
 }
