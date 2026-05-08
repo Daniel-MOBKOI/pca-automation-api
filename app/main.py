@@ -14,7 +14,7 @@ from pptx import Presentation
 from starlette.background import BackgroundTask
 
 
-APP_VERSION = "12.4.0-relationship-safe-copy-poc"
+APP_VERSION = "12.5.0-section-alignment-poc"
 
 app = FastAPI(title="PCA Modular Builder API", version=APP_VERSION)
 
@@ -40,7 +40,6 @@ class ModularOnePagerRequest(BaseModel):
     top_margin_px: int = 100
     bottom_margin_px: int = 100
     section_spacing_px: int = 60
-    left_margin_px: int = 0
 
 
 def px_to_emu(px: int) -> int:
@@ -160,8 +159,6 @@ def replace_placeholders_on_slide(slide, placeholder_values: Dict[str, Any]) -> 
 
 def create_output_presentation_with_source_theme(source_template_path: Path, slide_height: int) -> Presentation:
     output_prs = Presentation(str(source_template_path))
-
-    output_prs.slide_width = output_prs.slide_width
     output_prs.slide_height = slide_height
 
     slide_id_list = output_prs.slides._sldIdLst
@@ -246,13 +243,19 @@ def copy_group_to_slide_relationship_safe(source_shape, source_slide, target_sli
     return copied_shape
 
 
+def calculate_section_left(section_id: str, section_width: int, slide_width: int) -> int:
+    if section_id == "TITLE_OVERVIEW":
+        return int(slide_width - section_width)
+
+    return int((slide_width - section_width) / 2)
+
+
 def build_grouped_stacked_modular_ppt(
     selected_sections: List[str],
     placeholder_values: Optional[Dict[str, Any]] = None,
     top_margin_px: int = 100,
     bottom_margin_px: int = 100,
-    section_spacing_px: int = 60,
-    left_margin_px: int = 0
+    section_spacing_px: int = 60
 ) -> Dict[str, Any]:
 
     if not MODULAR_TEMPLATE_PATH.exists():
@@ -292,13 +295,13 @@ def build_grouped_stacked_modular_ppt(
             "label": registry[section_id].get("label", section_id),
             "slide": source_slide,
             "shape": group_shape,
+            "width": group_shape.width,
             "height": group_shape.height
         })
 
     top_margin = px_to_emu(top_margin_px)
     bottom_margin = px_to_emu(bottom_margin_px)
     spacing = px_to_emu(section_spacing_px)
-    left_margin = px_to_emu(left_margin_px)
 
     total_height = top_margin + bottom_margin
 
@@ -312,6 +315,8 @@ def build_grouped_stacked_modular_ppt(
         slide_height=total_height
     )
 
+    slide_width = output_prs.slide_width
+
     blank_layout = output_prs.slide_layouts[6]
     output_slide = output_prs.slides.add_slide(blank_layout)
 
@@ -319,17 +324,28 @@ def build_grouped_stacked_modular_ppt(
     built_sections = []
 
     for section in section_data:
+        section_id = section["section_id"]
+
+        section_left = calculate_section_left(
+            section_id=section_id,
+            section_width=section["width"],
+            slide_width=slide_width
+        )
+
         copy_group_to_slide_relationship_safe(
             source_shape=section["shape"],
             source_slide=section["slide"],
             target_slide=output_slide,
-            new_left=left_margin,
+            new_left=section_left,
             new_top=cursor_y
         )
 
         built_sections.append({
-            "section_id": section["section_id"],
+            "section_id": section_id,
             "label": section["label"],
+            "alignment": "right" if section_id == "TITLE_OVERVIEW" else "center",
+            "left_px_approx": round(section_left / EMU_PER_PX),
+            "width_px_approx": round(section["width"] / EMU_PER_PX),
             "height_px_approx": round(section["height"] / EMU_PER_PX)
         })
 
@@ -440,8 +456,7 @@ def generate_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
             placeholder_values=request.placeholder_values or {},
             top_margin_px=request.top_margin_px,
             bottom_margin_px=request.bottom_margin_px,
-            section_spacing_px=request.section_spacing_px,
-            left_margin_px=request.left_margin_px
+            section_spacing_px=request.section_spacing_px
         )
 
         output_path = result.pop("output_path")
@@ -473,8 +488,7 @@ def download_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
             placeholder_values=request.placeholder_values or {},
             top_margin_px=request.top_margin_px,
             bottom_margin_px=request.bottom_margin_px,
-            section_spacing_px=request.section_spacing_px,
-            left_margin_px=request.left_margin_px
+            section_spacing_px=request.section_spacing_px
         )
 
         output_path = result["output_path"]
