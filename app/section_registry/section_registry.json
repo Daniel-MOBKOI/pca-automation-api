@@ -1,0 +1,14 @@
+{
+  "title_overview": {
+    "label": "Title Overview",
+    "slide_index": 0
+  },
+  "top_titles_markets": {
+    "label": "Top Titles & Markets",
+    "slide_index": 1
+  },
+  "creative_overview": {
+    "label": "Creative Overview",
+    "slide_index": 2
+  }
+}
