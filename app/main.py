@@ -5,14 +5,16 @@ import tempfile
 import traceback
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
+from starlette.background import BackgroundTask
 
 
-APP_VERSION = "12.2.0-grouped-section-stack-poc"
+APP_VERSION = "12.3.0-grouped-stack-download-poc"
 
 app = FastAPI(title="PCA Modular Builder API", version=APP_VERSION)
 
@@ -27,6 +29,8 @@ SECTION_REGISTRY_PATH = Path(
 )
 
 EMU_PER_PX = 9525
+
+PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
 class ModularOnePagerRequest(BaseModel):
@@ -104,7 +108,7 @@ def find_main_group_shape(slide):
         if is_section_id_shape(shape):
             continue
 
-        is_group = shape.shape_type == 6  # GROUP
+        is_group = shape.shape_type == 6
         area = int(shape.width) * int(shape.height)
 
         candidates.append({
@@ -213,9 +217,6 @@ def build_grouped_stacked_modular_ppt(
             "section_id": section_id,
             "label": registry[section_id].get("label", section_id),
             "shape": group_shape,
-            "left": group_shape.left,
-            "top": group_shape.top,
-            "width": group_shape.width,
             "height": group_shape.height
         })
 
@@ -242,7 +243,7 @@ def build_grouped_stacked_modular_ppt(
     built_sections = []
 
     for section in section_data:
-        copied_shape = copy_group_to_slide(
+        copy_group_to_slide(
             section["shape"],
             output_slide,
             left_margin,
@@ -252,7 +253,6 @@ def build_grouped_stacked_modular_ppt(
         built_sections.append({
             "section_id": section["section_id"],
             "label": section["label"],
-            "height_emu": section["height"],
             "height_px_approx": round(section["height"] / EMU_PER_PX)
         })
 
@@ -268,14 +268,12 @@ def build_grouped_stacked_modular_ppt(
     with open(output_path, "rb") as f:
         file_bytes = f.read()
 
-    os.remove(output_path)
-
     return {
+        "output_path": output_path,
         "filename": "pca_modular_grouped_stacked_one_pager_v12.pptx",
-        "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "mime_type": PPTX_MIME_TYPE,
         "file_base64": base64.b64encode(file_bytes).decode("utf-8"),
         "built_sections": built_sections,
-        "slide_height_emu": total_height,
         "slide_height_px_approx": round(total_height / EMU_PER_PX)
     }
 
@@ -360,7 +358,7 @@ def inspect_modular_groups():
 @app.post("/generate-modular-one-pager-grouped-stacked")
 def generate_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
     try:
-        return build_grouped_stacked_modular_ppt(
+        result = build_grouped_stacked_modular_ppt(
             selected_sections=request.selected_sections,
             placeholder_values=request.placeholder_values or {},
             top_margin_px=request.top_margin_px,
@@ -368,6 +366,13 @@ def generate_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
             section_spacing_px=request.section_spacing_px,
             left_margin_px=request.left_margin_px
         )
+
+        output_path = result.pop("output_path")
+
+        if os.path.exists(output_path):
+            os.remove(output_path)
+
+        return result
 
     except HTTPException:
         raise
@@ -378,6 +383,42 @@ def generate_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
             status_code=500,
             detail={
                 "message": "Failed to generate grouped stacked modular one pager",
+                "error": str(e)
+            }
+        )
+
+
+@app.post("/download-modular-one-pager-grouped-stacked")
+def download_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
+    try:
+        result = build_grouped_stacked_modular_ppt(
+            selected_sections=request.selected_sections,
+            placeholder_values=request.placeholder_values or {},
+            top_margin_px=request.top_margin_px,
+            bottom_margin_px=request.bottom_margin_px,
+            section_spacing_px=request.section_spacing_px,
+            left_margin_px=request.left_margin_px
+        )
+
+        output_path = result["output_path"]
+        filename = result["filename"]
+
+        return FileResponse(
+            path=output_path,
+            filename=filename,
+            media_type=PPTX_MIME_TYPE,
+            background=BackgroundTask(lambda: os.remove(output_path) if os.path.exists(output_path) else None)
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to download grouped stacked modular one pager",
                 "error": str(e)
             }
         )
