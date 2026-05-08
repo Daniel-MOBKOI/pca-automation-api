@@ -1,8 +1,8 @@
-import base64
 import json
 import os
 import tempfile
 import traceback
+import uuid
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,10 +11,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
-from starlette.background import BackgroundTask
 
 
-APP_VERSION = "12.5.0-section-alignment-poc"
+APP_VERSION = "12.6.0-download-url-poc"
 
 app = FastAPI(title="PCA Modular Builder API", version=APP_VERSION)
 
@@ -28,9 +27,19 @@ SECTION_REGISTRY_PATH = Path(
     os.getenv("SECTION_REGISTRY_PATH", BASE_DIR / "section_registry" / "section_registry.json")
 )
 
+PUBLIC_BASE_URL = os.getenv(
+    "PUBLIC_BASE_URL",
+    "https://pca-modular-builder-v12.onrender.com"
+)
+
+GENERATED_FILES_DIR = Path(
+    os.getenv("GENERATED_FILES_DIR", tempfile.gettempdir())
+) / "pca_modular_generated"
+
+GENERATED_FILES_DIR.mkdir(parents=True, exist_ok=True)
+
 EMU_PER_PX = 9525
 PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
@@ -250,6 +259,15 @@ def calculate_section_left(section_id: str, section_width: int, slide_width: int
     return int((slide_width - section_width) / 2)
 
 
+def cleanup_old_generated_files() -> None:
+    try:
+        for file_path in GENERATED_FILES_DIR.glob("*.pptx"):
+            if file_path.stat().st_mtime < (os.path.getmtime(__file__) - 1):
+                continue
+    except Exception:
+        pass
+
+
 def build_grouped_stacked_modular_ppt(
     selected_sections: List[str],
     placeholder_values: Optional[Dict[str, Any]] = None,
@@ -316,7 +334,6 @@ def build_grouped_stacked_modular_ppt(
     )
 
     slide_width = output_prs.slide_width
-
     blank_layout = output_prs.slide_layouts[6]
     output_slide = output_prs.slides.add_slide(blank_layout)
 
@@ -353,19 +370,14 @@ def build_grouped_stacked_modular_ppt(
 
     replace_placeholders_on_slide(output_slide, placeholder_values or {})
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pptx") as tmp:
-        output_path = tmp.name
+    filename = f"pca_modular_one_pager_{uuid.uuid4().hex[:10]}.pptx"
+    output_path = GENERATED_FILES_DIR / filename
 
     output_prs.save(output_path)
 
-    with open(output_path, "rb") as f:
-        file_bytes = f.read()
-
     return {
-        "output_path": output_path,
-        "filename": "pca_modular_grouped_stacked_one_pager_v12.pptx",
-        "mime_type": PPTX_MIME_TYPE,
-        "file_base64": base64.b64encode(file_bytes).decode("utf-8"),
+        "output_path": str(output_path),
+        "filename": filename,
         "built_sections": built_sections,
         "slide_height_px_approx": round(total_height / EMU_PER_PX)
     }
@@ -378,8 +390,7 @@ def health():
         "app_version": APP_VERSION,
         "modular_template_exists": MODULAR_TEMPLATE_PATH.exists(),
         "section_registry_exists": SECTION_REGISTRY_PATH.exists(),
-        "modular_template_path": str(MODULAR_TEMPLATE_PATH),
-        "section_registry_path": str(SECTION_REGISTRY_PATH)
+        "generated_files_dir": str(GENERATED_FILES_DIR)
     }
 
 
@@ -448,8 +459,8 @@ def inspect_modular_groups():
     }
 
 
-@app.post("/generate-modular-one-pager-grouped-stacked")
-def generate_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
+@app.post("/create-modular-one-pager-download-link")
+def create_modular_one_pager_download_link(request: ModularOnePagerRequest):
     try:
         result = build_grouped_stacked_modular_ppt(
             selected_sections=request.selected_sections,
@@ -459,49 +470,17 @@ def generate_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
             section_spacing_px=request.section_spacing_px
         )
 
-        output_path = result.pop("output_path")
+        download_url = f"{PUBLIC_BASE_URL}/files/{result['filename']}"
 
-        if os.path.exists(output_path):
-            os.remove(output_path)
-
-        return result
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "message": "Failed to generate grouped stacked modular one pager",
-                "error": str(e)
-            }
-        )
-
-
-@app.post("/download-modular-one-pager-grouped-stacked")
-def download_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
-    try:
-        result = build_grouped_stacked_modular_ppt(
-            selected_sections=request.selected_sections,
-            placeholder_values=request.placeholder_values or {},
-            top_margin_px=request.top_margin_px,
-            bottom_margin_px=request.bottom_margin_px,
-            section_spacing_px=request.section_spacing_px
-        )
-
-        output_path = result["output_path"]
-        filename = result["filename"]
-
-        return FileResponse(
-            path=output_path,
-            filename=filename,
-            media_type=PPTX_MIME_TYPE,
-            background=BackgroundTask(
-                lambda: os.remove(output_path) if os.path.exists(output_path) else None
-            )
-        )
+        return {
+            "success": True,
+            "app_version": APP_VERSION,
+            "filename": result["filename"],
+            "download_url": download_url,
+            "built_sections": result["built_sections"],
+            "slide_height_px_approx": result["slide_height_px_approx"],
+            "message": "Modular one-pager generated successfully."
+        }
 
     except HTTPException:
         raise
@@ -511,7 +490,26 @@ def download_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
         raise HTTPException(
             status_code=500,
             detail={
-                "message": "Failed to download grouped stacked modular one pager",
+                "message": "Failed to create modular one-pager download link",
                 "error": str(e)
             }
         )
+
+
+@app.get("/files/{filename}")
+def get_generated_file(filename: str):
+    safe_filename = os.path.basename(filename)
+
+    if not safe_filename.endswith(".pptx"):
+        raise HTTPException(status_code=400, detail="Only .pptx files can be downloaded.")
+
+    file_path = GENERATED_FILES_DIR / safe_filename
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Generated file not found or has expired.")
+
+    return FileResponse(
+        path=str(file_path),
+        filename=safe_filename,
+        media_type=PPTX_MIME_TYPE
+    )
