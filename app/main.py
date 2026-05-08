@@ -14,7 +14,7 @@ from pptx import Presentation
 from starlette.background import BackgroundTask
 
 
-APP_VERSION = "12.3.0-grouped-stack-download-poc"
+APP_VERSION = "12.4.0-relationship-safe-copy-poc"
 
 app = FastAPI(title="PCA Modular Builder API", version=APP_VERSION)
 
@@ -29,8 +29,9 @@ SECTION_REGISTRY_PATH = Path(
 )
 
 EMU_PER_PX = 9525
-
 PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
 class ModularOnePagerRequest(BaseModel):
@@ -157,9 +158,82 @@ def replace_placeholders_on_slide(slide, placeholder_values: Dict[str, Any]) -> 
         replace_text_in_shape(shape, placeholder_values)
 
 
-def copy_group_to_slide(source_shape, target_slide, new_left: int, new_top: int):
-    new_el = deepcopy(source_shape.element)
-    target_slide.shapes._spTree.insert_element_before(new_el, "p:extLst")
+def create_output_presentation_with_source_theme(source_template_path: Path, slide_height: int) -> Presentation:
+    output_prs = Presentation(str(source_template_path))
+
+    output_prs.slide_width = output_prs.slide_width
+    output_prs.slide_height = slide_height
+
+    slide_id_list = output_prs.slides._sldIdLst
+
+    for slide_id in list(slide_id_list):
+        output_prs.part.drop_rel(slide_id.rId)
+        slide_id_list.remove(slide_id)
+
+    return output_prs
+
+
+def collect_relationship_ids_from_element(element) -> List[str]:
+    rel_ids = set()
+
+    for node in element.iter():
+        for attr_name, attr_value in node.attrib.items():
+            if attr_name.startswith("{" + REL_NS + "}"):
+                rel_ids.add(attr_value)
+
+    return list(rel_ids)
+
+
+def remap_relationship_ids_in_element(element, rel_id_map: Dict[str, str]) -> None:
+    for node in element.iter():
+        for attr_name, attr_value in list(node.attrib.items()):
+            if attr_value in rel_id_map:
+                node.attrib[attr_name] = rel_id_map[attr_value]
+
+
+def copy_relationships_for_element(source_slide, target_slide, copied_element) -> Dict[str, str]:
+    rel_id_map = {}
+    rel_ids = collect_relationship_ids_from_element(copied_element)
+
+    for old_rid in rel_ids:
+        try:
+            source_rel = source_slide.part.rels[old_rid]
+        except KeyError:
+            continue
+
+        try:
+            if getattr(source_rel, "is_external", False):
+                new_rid = target_slide.part.relate_to(
+                    source_rel.target_ref,
+                    source_rel.reltype,
+                    is_external=True
+                )
+            else:
+                new_rid = target_slide.part.relate_to(
+                    source_rel.target_part,
+                    source_rel.reltype
+                )
+
+            rel_id_map[old_rid] = new_rid
+
+        except Exception:
+            continue
+
+    remap_relationship_ids_in_element(copied_element, rel_id_map)
+
+    return rel_id_map
+
+
+def copy_group_to_slide_relationship_safe(source_shape, source_slide, target_slide, new_left: int, new_top: int):
+    copied_element = deepcopy(source_shape.element)
+
+    copy_relationships_for_element(
+        source_slide=source_slide,
+        target_slide=target_slide,
+        copied_element=copied_element
+    )
+
+    target_slide.shapes._spTree.insert_element_before(copied_element, "p:extLst")
 
     copied_shape = list(target_slide.shapes)[-1]
 
@@ -216,6 +290,7 @@ def build_grouped_stacked_modular_ppt(
         section_data.append({
             "section_id": section_id,
             "label": registry[section_id].get("label", section_id),
+            "slide": source_slide,
             "shape": group_shape,
             "height": group_shape.height
         })
@@ -232,9 +307,10 @@ def build_grouped_stacked_modular_ppt(
         if i < len(section_data) - 1:
             total_height += spacing
 
-    output_prs = Presentation()
-    output_prs.slide_width = source_prs.slide_width
-    output_prs.slide_height = total_height
+    output_prs = create_output_presentation_with_source_theme(
+        source_template_path=MODULAR_TEMPLATE_PATH,
+        slide_height=total_height
+    )
 
     blank_layout = output_prs.slide_layouts[6]
     output_slide = output_prs.slides.add_slide(blank_layout)
@@ -243,11 +319,12 @@ def build_grouped_stacked_modular_ppt(
     built_sections = []
 
     for section in section_data:
-        copy_group_to_slide(
-            section["shape"],
-            output_slide,
-            left_margin,
-            cursor_y
+        copy_group_to_slide_relationship_safe(
+            source_shape=section["shape"],
+            source_slide=section["slide"],
+            target_slide=output_slide,
+            new_left=left_margin,
+            new_top=cursor_y
         )
 
         built_sections.append({
@@ -407,7 +484,9 @@ def download_modular_one_pager_grouped_stacked(request: ModularOnePagerRequest):
             path=output_path,
             filename=filename,
             media_type=PPTX_MIME_TYPE,
-            background=BackgroundTask(lambda: os.remove(output_path) if os.path.exists(output_path) else None)
+            background=BackgroundTask(
+                lambda: os.remove(output_path) if os.path.exists(output_path) else None
+            )
         )
 
     except HTTPException:
