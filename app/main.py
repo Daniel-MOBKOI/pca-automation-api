@@ -1,3 +1,4 @@
+import base64
 import json
 import math
 import os
@@ -18,16 +19,18 @@ from pydantic import BaseModel, Field
 from pptx import Presentation
 
 
-APP_VERSION = "12.7.0-eoc-hybrid-modular-integration"
+APP_VERSION = "12.8.2-unified-modular-file-response"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
 
 PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+MAX_RETURN_FILE_BYTES = 10 * 1024 * 1024
+
 EMU_PER_PX = 9525
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
-app = FastAPI(title="PCA Modular Builder API", version=APP_VERSION)
+app = FastAPI(title="PCA Automation Generator", version=APP_VERSION)
 
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
@@ -91,18 +94,11 @@ def health():
         "status": "ok",
         "app_version": APP_VERSION,
         "modular_template_exists": MODULAR_TEMPLATE_PATH.exists(),
-        "modular_template_path": str(MODULAR_TEMPLATE_PATH),
         "section_registry_exists": SECTION_REGISTRY_PATH.exists(),
-        "section_registry_path": str(SECTION_REGISTRY_PATH),
         "rules_master_exists": RULES_MASTER_PATH.exists(),
-        "rules_master_path": str(RULES_MASTER_PATH),
         "generated_files_dir": str(GENERATED_FILES_DIR),
     }
 
-
-# ---------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------
 
 def clean_text(value: Any) -> str:
     if value is None:
@@ -125,6 +121,18 @@ def normalize_key(value: Any) -> str:
 
 def normalize_text(value: Any) -> str:
     return re.sub(r"[^a-z0-9%./()\- ]+", " ", clean_text(value).lower()).strip()
+
+
+def clean_dimension_label(value: Any) -> str:
+    value = clean_text(value)
+    value = re.sub(r"\bMISCRL\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"([a-z])([A-Z])", r"\1 \2", value)
+    value = re.sub(r"\bDisplay\s*Animated\b", "Display Animated", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bIn\s*Situ\s*Video\b", "In Situ Video", value, flags=re.IGNORECASE)
+    value = re.sub(r"[-_]+", " - ", value)
+    value = re.sub(r"\s+-\s+-\s+", " - ", value)
+    value = re.sub(r"\s{2,}", " ", value)
+    return value.strip(" -")
 
 
 def safe_number(value: Any) -> Optional[float]:
@@ -176,131 +184,9 @@ def format_percent(value: Any) -> Optional[str]:
         return None
 
     if num <= 1:
-        num *= 100
+        num = num * 100
 
     return f"{round(num, 2)}%"
-
-
-def fill_missing_for_ppt(mapped: Dict[str, Any]) -> Dict[str, Any]:
-    for key, value in mapped.items():
-        if value is None or clean_text(value) == "":
-            mapped[key] = MISSING_PPT_VALUE
-    return mapped
-
-
-def build_display_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        key: MISSING_DISPLAY_VALUE if value == MISSING_PPT_VALUE else value
-        for key, value in mapped.items()
-    }
-
-
-def px_to_emu(px: int) -> int:
-    return int(px * EMU_PER_PX)
-
-
-# ---------------------------------------------------------------------
-# EOC hybrid parser
-# ---------------------------------------------------------------------
-
-MARKET_CODE_MAP = {
-    "france": "FR", "french": "FR", "fr": "FR",
-    "united kingdom": "UK", "uk": "UK", "gb": "UK", "great britain": "UK", "britain": "UK",
-    "italy": "IT", "italian": "IT", "it": "IT",
-    "spain": "ES", "spanish": "ES", "es": "ES",
-    "germany": "DE", "german": "DE", "de": "DE",
-    "netherlands": "NL", "dutch": "NL", "nl": "NL",
-    "belgium": "BE", "be": "BE",
-    "switzerland": "CH", "ch": "CH",
-    "austria": "AT", "at": "AT",
-    "portugal": "PT", "pt": "PT",
-    "ireland": "IE", "ie": "IE",
-    "usa": "US", "us": "US", "united states": "US", "united states of america": "US",
-    "canada": "CA", "ca": "CA",
-    "australia": "AU", "au": "AU",
-    "japan": "JP", "jp": "JP",
-    "hong kong": "HK", "hk": "HK",
-    "singapore": "SG", "sg": "SG",
-    "thailand": "TH", "thai": "TH", "th": "TH",
-    "taiwan": "TW", "tw": "TW",
-    "china": "CN", "cn": "CN",
-    "korea": "KR", "south korea": "KR", "kr": "KR",
-    "india": "IN", "in": "IN",
-    "mexico": "MX", "mx": "MX",
-    "brazil": "BR", "br": "BR",
-}
-
-
-ALIASES = {
-    "campaign": ["campaign", "campaign name"],
-    "client_brand": ["client", "brand", "advertiser", "brand / client"],
-    "impressions": ["impressions", "delivered impressions", "served impressions"],
-    "ctr": ["ctr", "click through rate", "click-through rate"],
-    "engagement_rate": ["engagement rate", "engagement %", "er", "total er", "overall er"],
-    "vcr": ["video completion rate", "vcr", "completed view rate", "video % complete"],
-    "on_screen": ["mobkoi on screen", "on screen", "on-screen", "mrc viewability", "viewability", "viewable rate"],
-    "mobkoi_on_screen": ["mobkoi on screen"],
-    "mrc_viewability": ["mrc viewability"],
-    "spend": ["actual spend", "spend", "total spend", "media spend"],
-    "sold_paid_units": ["sold paid units"],
-    "delivered_overall_av_units": ["delivered overall av units", "delivered overall av (units)"],
-    "delivery_incl_av": ["delivery percentage incl av", "delivery percentage (incl av)"],
-    "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)", "worth of added value"],
-    "site": ["site", "publisher", "domain", "environment", "property", "placement", "title", "inventory", "app", "website"],
-    "geo": ["geo", "market", "markets", "country", "countries", "region", "territory", "location", "locale"],
-    "format": ["format", "formats", "creative", "creative format", "ad format", "unit type", "product", "product type", "placement type"],
-    "date": ["date", "report date", "served date", "live date"],
-}
-
-
-def clean_dimension_label(value: Any) -> str:
-    value = clean_text(value)
-    value = re.sub(r"\bMISCRL\b", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"([a-z])([A-Z])", r"\1 \2", value)
-    value = re.sub(r"\bDisplay\s*Animated\b", "Display Animated", value, flags=re.IGNORECASE)
-    value = re.sub(r"\bIn\s*Situ\s*Video\b", "In Situ Video", value, flags=re.IGNORECASE)
-    value = re.sub(r"[-_]+", " - ", value)
-    value = re.sub(r"\s+-\s+-\s+", " - ", value)
-    value = re.sub(r"\s{2,}", " ", value)
-    return value.strip(" -")
-
-
-def normalise_market_label(value: Any) -> str:
-    raw = clean_dimension_label(value)
-    if not raw:
-        return ""
-
-    raw = re.sub(
-        r"\b(total|totals|overall|summary|market|markets|country|countries)\b",
-        "",
-        raw,
-        flags=re.IGNORECASE,
-    ).strip(" ,-")
-
-    if not raw:
-        return ""
-
-    parts = re.split(r"[,;/|]+", raw)
-    out = []
-
-    for part in parts:
-        part = clean_text(part).strip(" -")
-        if not part:
-            continue
-
-        key = part.lower()
-        code = MARKET_CODE_MAP.get(key)
-
-        if not code:
-            if re.fullmatch(r"[A-Za-z]{2,3}", part):
-                code = part.upper()
-            else:
-                code = part.upper() if len(part) <= 3 else part
-
-        if code and code not in out:
-            out.append(code)
-
-    return ", ".join(out)
 
 
 def parse_date_from_any(value: Any) -> Optional[datetime]:
@@ -369,6 +255,20 @@ def format_quarter_from_date(end_dt: Optional[datetime]) -> Optional[str]:
     return f"Q{q} {end_dt.year}"
 
 
+def fill_missing_for_ppt(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    for key, value in mapped.items():
+        if value is None or clean_text(value) == "":
+            mapped[key] = MISSING_PPT_VALUE
+    return mapped
+
+
+def build_display_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: MISSING_DISPLAY_VALUE if value == MISSING_PPT_VALUE else value
+        for key, value in mapped.items()
+    }
+
+
 def first_non_empty(series: pd.Series) -> Any:
     for value in series:
         if clean_text(value) != "":
@@ -380,18 +280,93 @@ def is_blank_row(values: List[Any]) -> bool:
     return all(clean_text(v) == "" for v in values)
 
 
-def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
-    if not RULES_MASTER_PATH.exists():
-        return None
+MARKET_CODE_MAP = {
+    "france": "FR", "french": "FR", "fr": "FR",
+    "united kingdom": "UK", "uk": "UK", "gb": "UK", "great britain": "UK", "britain": "UK",
+    "italy": "IT", "italian": "IT", "it": "IT",
+    "spain": "ES", "spanish": "ES", "es": "ES",
+    "germany": "DE", "german": "DE", "de": "DE",
+    "netherlands": "NL", "dutch": "NL", "nl": "NL",
+    "belgium": "BE", "be": "BE",
+    "switzerland": "CH", "ch": "CH",
+    "austria": "AT", "at": "AT",
+    "portugal": "PT", "pt": "PT",
+    "ireland": "IE", "ie": "IE",
+    "usa": "US", "us": "US", "united states": "US", "united states of america": "US",
+    "canada": "CA", "ca": "CA",
+    "australia": "AU", "au": "AU",
+    "japan": "JP", "jp": "JP",
+    "hong kong": "HK", "hk": "HK",
+    "singapore": "SG", "sg": "SG",
+    "thailand": "TH", "thai": "TH", "th": "TH",
+    "taiwan": "TW", "tw": "TW",
+    "china": "CN", "cn": "CN",
+    "korea": "KR", "south korea": "KR", "kr": "KR",
+    "india": "IN", "in": "IN",
+    "mexico": "MX", "mx": "MX",
+    "brazil": "BR", "br": "BR",
+}
 
-    try:
-        xls = pd.ExcelFile(RULES_MASTER_PATH, engine="openpyxl")
-        return {
-            sheet: pd.read_excel(RULES_MASTER_PATH, sheet_name=sheet, engine="openpyxl")
-            for sheet in xls.sheet_names
-        }
-    except Exception:
-        return None
+
+def normalise_market_label(value: Any) -> str:
+    raw = clean_dimension_label(value)
+    if not raw:
+        return ""
+
+    raw = re.sub(
+        r"\b(total|totals|overall|summary|market|markets|country|countries)\b",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    raw = raw.strip(" ,-")
+
+    if not raw:
+        return ""
+
+    parts = re.split(r"[,;/|]+", raw)
+    out = []
+
+    for part in parts:
+        part = clean_text(part).strip(" -")
+        if not part:
+            continue
+
+        key = part.lower()
+        code = MARKET_CODE_MAP.get(key)
+
+        if not code:
+            if re.fullmatch(r"[A-Za-z]{2,3}", part):
+                code = part.upper()
+            else:
+                code = part.upper() if len(part) <= 3 else part
+
+        if code and code not in out:
+            out.append(code)
+
+    return ", ".join(out)
+
+
+ALIASES = {
+    "campaign": ["campaign", "campaign name"],
+    "client_brand": ["client", "brand", "advertiser", "brand / client"],
+    "impressions": ["impressions", "delivered impressions", "served impressions"],
+    "ctr": ["ctr", "click through rate", "click-through rate"],
+    "engagement_rate": ["engagement rate", "engagement %", "er", "total er", "overall er"],
+    "vcr": ["video completion rate", "vcr", "completed view rate", "video % complete"],
+    "on_screen": ["mobkoi on screen", "on screen", "on-screen", "mrc viewability", "viewability", "viewable rate"],
+    "mobkoi_on_screen": ["mobkoi on screen"],
+    "mrc_viewability": ["mrc viewability"],
+    "spend": ["actual spend", "spend", "total spend", "media spend"],
+    "sold_paid_units": ["sold paid units"],
+    "delivered_overall_av_units": ["delivered overall av units", "delivered overall av (units)"],
+    "delivery_incl_av": ["delivery percentage incl av", "delivery percentage (incl av)"],
+    "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)", "worth of added value"],
+    "site": ["site", "publisher", "domain", "environment", "property", "placement", "title", "inventory", "app", "website"],
+    "geo": ["geo", "market", "markets", "country", "countries", "region", "territory", "location", "locale"],
+    "format": ["format", "formats", "creative", "creative format", "ad format", "unit type", "product", "product type", "placement type"],
+    "date": ["date", "report date", "served date", "live date"],
+}
 
 
 def header_match_score(header: str, aliases: List[str]) -> int:
@@ -462,6 +437,9 @@ def find_candidate_header_rows(df: pd.DataFrame) -> List[int]:
 
 
 def build_block_from_header(df: pd.DataFrame, header_row: int) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
     temp = df.iloc[header_row:].copy()
     if temp.empty:
         return pd.DataFrame()
@@ -747,16 +725,51 @@ def join_dimension_values(df: pd.DataFrame, dim_key: str) -> Optional[str]:
     else:
         raw_vals = [clean_dimension_label(v) for v in col_data.tolist() if clean_dimension_label(v)]
 
-    blocked = {"total", "totals", "overall", "summary", "campaign", "format", "formats", "market", "markets"}
-    raw_vals = [v for v in raw_vals if normalize_header(v) not in blocked]
+    blocked = {
+        "total", "totals", "overall", "summary",
+        "campaign", "format", "formats",
+        "market", "markets"
+    }
+
+    raw_vals = [
+        v for v in raw_vals
+        if normalize_header(v) not in blocked
+    ]
 
     if not raw_vals:
         return None
 
+    base = raw_vals[0]
+    cleaned = [base]
+
+    for val in raw_vals[1:]:
+        if dim_key == "geo":
+            candidate = val
+        else:
+            parts_base = base.split(" - ")
+            parts_val = val.split(" - ")
+
+            suffix = parts_val
+
+            for i in range(min(len(parts_base), len(parts_val))):
+                if parts_base[i] != parts_val[i]:
+                    suffix = parts_val[i:]
+                    break
+            else:
+                if len(parts_val) > len(parts_base):
+                    suffix = parts_val[len(parts_base):]
+                else:
+                    suffix = [val]
+
+            candidate = clean_dimension_label(" - ".join([p for p in suffix if p]))
+
+        if candidate:
+            cleaned.append(candidate)
+
     seen = []
     final = []
 
-    for v in raw_vals:
+    for v in cleaned:
         if v not in seen:
             seen.append(v)
             final.append(v)
@@ -881,7 +894,6 @@ def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
     ]
 
     warnings = []
-
     for key, label in [
         ("CLIENT_NAME", "CLIENT_NAME missing"),
         ("CAMPAIGN_MARKETS", "CAMPAIGN_MARKETS missing"),
@@ -901,6 +913,20 @@ def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
         "missing_required": missing_required,
         "warnings": warnings,
     }
+
+
+def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
+    if not RULES_MASTER_PATH.exists():
+        return None
+
+    try:
+        xls = pd.ExcelFile(RULES_MASTER_PATH, engine="openpyxl")
+        return {
+            sheet: pd.read_excel(RULES_MASTER_PATH, sheet_name=sheet, engine="openpyxl")
+            for sheet in xls.sheet_names
+        }
+    except Exception:
+        return None
 
 
 def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> Dict[str, Any]:
@@ -1032,10 +1058,6 @@ def read_uploaded_eoc(path: Path) -> Dict[str, pd.DataFrame]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not read EOC Excel file: {exc}")
 
-
-# ---------------------------------------------------------------------
-# Modular builder
-# ---------------------------------------------------------------------
 
 def load_section_registry() -> Dict[str, Any]:
     if not SECTION_REGISTRY_PATH.exists():
@@ -1233,11 +1255,20 @@ def copy_group_to_slide_relationship_safe(source_shape, source_slide, target_sli
     return copied_shape
 
 
+def px_to_emu(px: int) -> int:
+    return int(px * EMU_PER_PX)
+
+
 def calculate_section_left(section_id: str, section_width: int, slide_width: int) -> int:
     if section_id == "TITLE_OVERVIEW":
         return int(slide_width - section_width)
 
     return int((slide_width - section_width) / 2)
+
+
+def safe_filename(value: str) -> str:
+    value = clean_text(value) or "Campaign"
+    return re.sub(r'[\\/*?:"<>|]', "", value)
 
 
 def build_grouped_stacked_modular_ppt(
@@ -1343,8 +1374,10 @@ def build_grouped_stacked_modular_ppt(
     replace_placeholders_on_slide(output_slide, placeholder_values or {})
 
     campaign_name = clean_text(placeholder_values.get("CAMPAIGN_NAME")) if placeholder_values else ""
-    safe_campaign = re.sub(r'[\\/*?:"<>|]', "", campaign_name or "Campaign")
-    filename = f"PCA Modular One Pager_{safe_campaign}_{datetime.now().strftime('%d%m%Y')}_{uuid.uuid4().hex[:6]}.pptx"
+    safe_campaign = safe_filename(campaign_name or "Campaign")
+    date_stamp = datetime.now().strftime("%d%m%Y")
+
+    filename = f"PCA One Pager_{safe_campaign}_{date_stamp}.pptx"
     output_path = GENERATED_FILES_DIR / filename
 
     output_prs.save(output_path)
@@ -1356,10 +1389,6 @@ def build_grouped_stacked_modular_ppt(
         "slide_height_px_approx": round(total_height / EMU_PER_PX)
     }
 
-
-# ---------------------------------------------------------------------
-# API endpoints
-# ---------------------------------------------------------------------
 
 @app.get("/list-modular-sections")
 def list_modular_sections():
@@ -1379,50 +1408,6 @@ def list_modular_sections():
     return {
         "app_version": APP_VERSION,
         "sections": sections
-    }
-
-
-@app.get("/detect-modular-template-sections")
-def detect_modular_template_sections():
-    if not MODULAR_TEMPLATE_PATH.exists():
-        raise HTTPException(status_code=500, detail=f"Modular template not found at {MODULAR_TEMPLATE_PATH}")
-
-    prs = Presentation(str(MODULAR_TEMPLATE_PATH))
-    detected = detect_template_sections(prs)
-
-    return {
-        "app_version": APP_VERSION,
-        "detected_sections": detected,
-        "count": len(detected)
-    }
-
-
-@app.get("/inspect-modular-groups")
-def inspect_modular_groups():
-    if not MODULAR_TEMPLATE_PATH.exists():
-        raise HTTPException(status_code=500, detail=f"Modular template not found at {MODULAR_TEMPLATE_PATH}")
-
-    prs = Presentation(str(MODULAR_TEMPLATE_PATH))
-    detected = detect_template_sections(prs)
-
-    results = []
-
-    for section_id, slide_index in detected.items():
-        slide = prs.slides[slide_index]
-        main_group = find_main_group_shape(slide)
-
-        results.append({
-            "section_id": section_id,
-            "slide_index": slide_index,
-            "main_shape_found": main_group is not None,
-            "main_shape_type": str(main_group.shape_type) if main_group else None,
-            "main_shape_width_px_approx": round(main_group.width / EMU_PER_PX) if main_group else None,
-            "main_shape_height_px_approx": round(main_group.height / EMU_PER_PX) if main_group else None
-        })
-
-    return {
-        "app_version": APP_VERSION,
-        "sections": results
     }
 
 
@@ -1508,11 +1493,7 @@ async def create_modular_one_pager_from_eoc(request: ModularOnePagerFromEocReque
             parsed = build_mapped_values(sheets, filename=eoc_path.name)
 
         mapped_values = parsed["mapped_values"]
-
-        if request.exec_summary:
-            mapped_values["EXEC_SUMMARY"] = request.exec_summary
-        else:
-            mapped_values["EXEC_SUMMARY"] = MISSING_PPT_VALUE
+        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
 
         result = build_grouped_stacked_modular_ppt(
             selected_sections=request.selected_sections,
@@ -1550,20 +1531,90 @@ async def create_modular_one_pager_from_eoc(request: ModularOnePagerFromEocReque
         )
 
 
+@app.post("/create-modular-one-pager-from-eoc-file-response")
+async def create_modular_one_pager_from_eoc_file_response(request: ModularOnePagerFromEocRequest):
+    try:
+        if not request.openaiFileIdRefs:
+            raise HTTPException(status_code=400, detail="No EOC file supplied.")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            eoc_path = await download_openai_file(request.openaiFileIdRefs[0], tmp_dir)
+            sheets = read_uploaded_eoc(eoc_path)
+            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+
+        mapped_values = parsed["mapped_values"]
+        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
+
+        result = build_grouped_stacked_modular_ppt(
+            selected_sections=request.selected_sections,
+            placeholder_values=mapped_values,
+            top_margin_px=request.top_margin_px,
+            bottom_margin_px=request.bottom_margin_px,
+            section_spacing_px=request.section_spacing_px
+        )
+
+        output_path = Path(result["output_path"])
+
+        if output_path.stat().st_size > MAX_RETURN_FILE_BYTES:
+            download_url = f"{PUBLIC_BASE_URL}/files/{output_path.name}"
+            return {
+                "success": True,
+                "app_version": APP_VERSION,
+                "filename": result["filename"],
+                "download_url": download_url,
+                "built_sections": result["built_sections"],
+                "slide_height_px_approx": result["slide_height_px_approx"],
+                "summary": parsed,
+                "message": "File was too large for file-card return, so a download link was created."
+            }
+
+        encoded = base64.b64encode(output_path.read_bytes()).decode("utf-8")
+
+        return {
+            "success": True,
+            "app_version": APP_VERSION,
+            "summary": parsed,
+            "built_sections": result["built_sections"],
+            "slide_height_px_approx": result["slide_height_px_approx"],
+            "openaiFileResponse": [
+                {
+                    "name": result["filename"],
+                    "mime_type": PPTX_MIME_TYPE,
+                    "content": encoded,
+                }
+            ],
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to create modular one-pager file response",
+                "error": str(e),
+                "trace": traceback.format_exc(),
+            }
+        )
+
+
 @app.get("/files/{filename}")
 def get_generated_file(filename: str):
-    safe_filename = os.path.basename(filename)
+    safe_name = os.path.basename(filename)
 
-    if not safe_filename.endswith(".pptx"):
+    if not safe_name.endswith(".pptx"):
         raise HTTPException(status_code=400, detail="Only .pptx files can be downloaded.")
 
-    file_path = GENERATED_FILES_DIR / safe_filename
+    file_path = GENERATED_FILES_DIR / safe_name
 
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Generated file not found or has expired.")
 
     return FileResponse(
         path=str(file_path),
-        filename=safe_filename,
+        filename=safe_name,
         media_type=PPTX_MIME_TYPE
     )
