@@ -17,7 +17,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
-from fastapi_mcp import FastApiMCP
 
 APP_VERSION = "12.8.2-unified-modular-file-response"
 
@@ -90,7 +89,6 @@ class ModularOnePagerFromEocRequest(BaseModel):
 
 @app.get("/")
 def read_root():
-    """Root path to ensure Google Cloud validation check returns a 200 success code"""
     return {
         "status": "healthy",
         "message": "PCA Automation Generator API is running successfully.",
@@ -1632,7 +1630,118 @@ def get_generated_file(filename: str):
 # ====================================================================
 # MODEL CONTEXT PROTOCOL (MCP) PROTOCOL INTEGRATION
 # ====================================================================
-# Instantiated cleanly using only the mandatory positional 'app' context requirement.
 
-mcp = FastApiMCP(app)
-mcp.mount()
+# Native, stateless custom HTTP POST handler layer built directly on standard routes.
+# This interceptor maps incoming payload methods straight to your validation core functions.
+
+@app.post("/mcp")
+async def mcp_post_endpoint(request: Dict[str, Any]):
+    req_id = request.get("id", 1)
+    method = request.get("method", "")
+    params = request.get("params", {})
+
+    if method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "tools": [
+                    {
+                        "name": "validate_eoc",
+                        "description": "Validate an uploaded EOC Excel file and return mapped campaign values.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "openaiFileIdRefs": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "download_link": {"type": "string"},
+                                            "name": {"type": "string"},
+                                            "mime_type": {"type": "string"}
+                                        }
+                                    }
+                                }
+                            },
+                            "required": ["openaiFileIdRefs"]
+                        }
+                    },
+                    {
+                        "name": "create_modular_one_pager",
+                        "description": "Generate a modular PowerPoint One-Pager from verified EOC metrics.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "openaiFileIdRefs": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "download_link": {"type": "string"}
+                                        }
+                                    }
+                                },
+                                "selected_sections": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "exec_summary": {"type": "string"}
+                            },
+                            "required": ["openaiFileIdRefs", "selected_sections"]
+                        }
+                    }
+                ]
+            }
+        }
+
+    elif method == "tools/call":
+        tool_name = params.get("name", "")
+        arguments = params.get("arguments", {})
+
+        if tool_name == "validate_eoc":
+            try:
+                payload = FileRefsPayload(**arguments)
+                raw_response = await validate_eoc_endpoint(payload)
+                response_text = raw_response.body.decode("utf-8")
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [{"type": "text", "text": response_text}]
+                    }
+                }
+            except Exception as e:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32603, "message": f"Execution error: {str(e)}"}
+                }
+
+        elif tool_name == "create_modular_one_pager":
+            try:
+                request_obj = ModularOnePagerFromEocRequest(**arguments)
+                raw_response = await create_modular_one_pager_from_eoc_file_response(request_obj)
+                if hasattr(raw_response, "body"):
+                    response_text = raw_response.body.decode("utf-8")
+                else:
+                    response_text = json.dumps(raw_response)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [{"type": "text", "text": response_text}]
+                    }
+                }
+            except Exception as e:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32603, "message": f"Execution error: {str(e)}"}
+                }
+
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "error": {"code": -32601, "message": f"Method not found: {method}"}
+    }
