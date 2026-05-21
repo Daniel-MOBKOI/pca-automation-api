@@ -1632,13 +1632,11 @@ def get_generated_file(filename: str):
 # ====================================================================
 # MODEL CONTEXT PROTOCOL (MCP) PROTOCOL INTEGRATION
 # ====================================================================
-# This single layer automatically inspects all paths above, maps the parameters,
-# and hosts an LLM-compliant endpoint directly over the /mcp route path.
+# Removed the unexpected 'base_url' parameter so the library initializes cleanly.
 
 mcp = FastApiMCP(
     app,
-    name="PCA_Automation_Generator",
-    description="Render backend to validate campaign metrics and assemble modular PowerPoint files.",
-    base_url=PUBLIC_BASE_URL
+    title="PCA_Automation_Generator",
+    description="Render backend to validate campaign metrics and assemble modular PowerPoint files."
 )
 mcp.mount()
