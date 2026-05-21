@@ -1630,8 +1630,8 @@ def get_generated_file(filename: str):
 # ====================================================================
 # MODEL CONTEXT PROTOCOL (MCP) UNIFIED PROTOCOL INTERCEPTOR
 # ====================================================================
-# Refactored to natively handle the mandatory initialize handshake exchange 
-# required by the enterprise Google Cloud agent router engine.
+# Refactored to route PowerPoint assembly directly to the lightweight 
+# link-generation endpoint, preventing stateless buffer overloads.
 
 @app.post("/mcp")
 async def mcp_post_endpoint(request: Dict[str, Any]):
@@ -1660,7 +1660,7 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
     elif method == "notifications/initialized":
         return JSONResponse(content={})
 
-    # 3. Handle System Capability Discovery Discovery Requests
+    # 3. Handle System Capability Discovery Requests
     elif method == "tools/list":
         return {
             "jsonrpc": "2.0",
@@ -1716,7 +1716,7 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
             }
         }
 
-    # 4. Route Runtime Tool Executions straight to Core Core Subroutines
+    # 4. Route Runtime Tool Executions straight to Core Subroutines
     elif method == "tools/call":
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
@@ -1743,7 +1743,8 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
         elif tool_name == "create_modular_one_pager":
             try:
                 request_obj = ModularOnePagerFromEocRequest(**arguments)
-                raw_response = await create_modular_one_pager_from_eoc_file_response(request_obj)
+                # Switched target to the lightweight link generator to resolve the connection reset
+                raw_response = await create_modular_one_pager_from_eoc(request_obj)
                 if hasattr(raw_response, "body"):
                     response_text = raw_response.body.decode("utf-8")
                 else:
