@@ -1628,11 +1628,10 @@ def get_generated_file(filename: str):
     )
 
 # ====================================================================
-# MODEL CONTEXT PROTOCOL (MCP) PROTOCOL INTEGRATION
+# MODEL CONTEXT PROTOCOL (MCP) UNIFIED PROTOCOL INTERCEPTOR
 # ====================================================================
-
-# Native, stateless custom HTTP POST handler layer built directly on standard routes.
-# This interceptor maps incoming payload methods straight to your validation core functions.
+# Refactored to natively handle the mandatory initialize handshake exchange 
+# required by the enterprise Google Cloud agent router engine.
 
 @app.post("/mcp")
 async def mcp_post_endpoint(request: Dict[str, Any]):
@@ -1640,7 +1639,29 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
     method = request.get("method", "")
     params = request.get("params", {})
 
-    if method == "tools/list":
+    # 1. Handle Protocol Handshake Initialization Check
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "PCA_Automation_Generator",
+                    "version": "12.8.2"
+                }
+            }
+        }
+
+    # 2. Handle Post-Initialization Event Notification
+    elif method == "notifications/initialized":
+        return JSONResponse(content={})
+
+    # 3. Handle System Capability Discovery Discovery Requests
+    elif method == "tools/list":
         return {
             "jsonrpc": "2.0",
             "id": req_id,
@@ -1695,6 +1716,7 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
             }
         }
 
+    # 4. Route Runtime Tool Executions straight to Core Core Subroutines
     elif method == "tools/call":
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
@@ -1740,6 +1762,7 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
                     "error": {"code": -32603, "message": f"Execution error: {str(e)}"}
                 }
 
+    # 5. Fallback Error Block for Unsupported Operations
     return {
         "jsonrpc": "2.0",
         "id": req_id,
