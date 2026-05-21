@@ -5,4 +5,3 @@ openpyxl
 python-pptx
 httpx
 pydantic
-fastapi-mcp
