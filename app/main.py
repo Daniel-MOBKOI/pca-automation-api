@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
-
+from fastapi_mcp import FastApiMCP
 
 APP_VERSION = "12.8.2-unified-modular-file-response"
 
@@ -86,6 +86,16 @@ class ModularOnePagerFromEocRequest(BaseModel):
     top_margin_px: int = 100
     bottom_margin_px: int = 100
     section_spacing_px: int = 60
+
+
+@app.get("/")
+def read_root():
+    """Root path to ensure Google Cloud validation check returns a 200 success code"""
+    return {
+        "status": "healthy",
+        "message": "PCA Automation Generator API is running successfully.",
+        "mcp_path": "/mcp"
+    }
 
 
 @app.get("/health")
@@ -1412,7 +1422,7 @@ def list_modular_sections():
 
 
 @app.post("/validate-eoc")
-async def validate_eoc(payload: FileRefsPayload):
+async def validate_eoc_endpoint(payload: FileRefsPayload):
     try:
         if not payload.openaiFileIdRefs:
             raise HTTPException(status_code=400, detail="No EOC file supplied.")
@@ -1618,82 +1628,17 @@ def get_generated_file(filename: str):
         filename=safe_name,
         media_type=PPTX_MIME_TYPE
     )
-# ==================================================
-# MODEL CONTEXT PROTOCOL (MCP) UNIFIED COMPATIBILITY LAYER
-# ==================================================
-from mcp.server import Server
-from mcp.server.fastapi import FastApiServerWrapper
 
-# Initialize a standard MCP server instance
-mcp_app = Server("pca-automation-generator")
+# ====================================================================
+# MODEL CONTEXT PROTOCOL (MCP) PROTOCOL INTEGRATION
+# ====================================================================
+# This single layer automatically inspects all paths above, maps the parameters,
+# and hosts an LLM-compliant endpoint directly over the /mcp route path.
 
-@mcp_app.list_tools()
-async def list_tools():
-    """Advertise available PCA system capabilities to Gemini"""
-    return [
-        {
-            "name": "validate_eoc",
-            "description": "Validate an uploaded EOC Excel file and return mapped campaign values.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "openaiFileIdRefs": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "download_link": {"type": "string"}
-                            }
-                        }
-                    }
-                },
-                "required": ["openaiFileIdRefs"]
-            }
-        },
-        {
-            "name": "create_modular_one_pager",
-            "description": "Generate a modular PowerPoint One-Pager from verified EOC metrics.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "openaiFileIdRefs": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "download_link": {"type": "string"}
-                            }
-                        }
-                    },
-                    "selected_sections": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    },
-                    "exec_summary": {"type": "string"}
-                },
-                "required": ["openaiFileIdRefs", "selected_sections"]
-            }
-        }
-    ]
-
-@mcp_app.call_tool()
-async def call_tool(name: str, arguments: dict):
-    """Route Gemini requests straight to your existing FastAPI functions"""
-    if name == "validate_eoc":
-        # Package payload exactly how your existing code expects it
-        payload = FileRefsPayload(**arguments)
-        response = await validate_eoc(payload)
-        return [{"type": "text", "text": response.body.decode("utf-8")}]
-        
-    elif name == "create_modular_one_pager":
-        request_obj = ModularOnePagerFromEocRequest(**arguments)
-        response = await create_modular_one_pager_from_eoc_file_response(request_obj)
-        import json
-        return [{"type": "text", "text": json.dumps(response)}]
-        
-    raise ValueError(f"Unknown tool: {name}")
-
-# Mount the MCP server onto your live FastAPI application using an SSE stream
-mcp_wrapper = FastApiServerWrapper(mcp_app)
-app.add_route("/mcp", mcp_wrapper.handle_sse)
-app.add_route("/mcp/messages", mcp_wrapper.handle_message, methods=["POST"])
+mcp = FastApiMCP(
+    app,
+    name="PCA_Automation_Generator",
+    description="Render backend to validate campaign metrics and assemble modular PowerPoint files.",
+    base_url=PUBLIC_BASE_URL
+)
+mcp.mount()
