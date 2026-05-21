@@ -1632,11 +1632,7 @@ def get_generated_file(filename: str):
 # ====================================================================
 # MODEL CONTEXT PROTOCOL (MCP) PROTOCOL INTEGRATION
 # ====================================================================
-# Removed the unexpected 'base_url' parameter so the library initializes cleanly.
+# Instantiated cleanly using only the mandatory positional 'app' context requirement.
 
-mcp = FastApiMCP(
-    app,
-    title="PCA_Automation_Generator",
-    description="Render backend to validate campaign metrics and assemble modular PowerPoint files."
-)
+mcp = FastApiMCP(app)
 mcp.mount()
