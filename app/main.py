@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.11-onepager-combined-placeholder-fix"
+APP_VERSION = "12.9.12-stable-rollback-exec-summary-restored"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -1483,17 +1483,11 @@ def build_placeholder_lookup(placeholder_values: Dict[str, Any]) -> Dict[str, st
 
 
 def replace_placeholders_in_text(text: str, placeholder_values: Dict[str, Any]) -> str:
-    """Replace placeholders in a full text string, including malformed/nested tokens.
+    """Replace placeholders in a full text string, including split tokens.
 
-    PowerPoint can split or visually clip placeholders in narrow grouped table cells.
-    In the combined Top Titles & Markets section this can produce strings such as:
-        {{TOP_TITLES_CTR_1_NAM{{TOP_TITLES_CTR_1_VALUE}}
-    A normal {{...}} regex treats that as one invalid token and returns N/A.
-
-    This function therefore:
-    1. Replaces normal {{KEY}} tokens.
-    2. Replaces any remaining raw placeholder key fragments found in the text.
-    3. Removes leftover braces from malformed tokens.
+    This handles both normal tokens like {{TOP_TITLES_CTR_1_NAME}} and tokens
+    where PowerPoint has inserted spaces/newlines inside the braces. Unknown
+    placeholders are converted to N/A as a final safety net.
     """
     if not text:
         return text
@@ -1505,43 +1499,17 @@ def replace_placeholders_in_text(text: str, placeholder_values: Dict[str, Any]) 
         norm_key = normalise_placeholder_key(raw_key)
         return lookup.get(norm_key, MISSING_PPT_VALUE)
 
-    # First pass - standard placeholder replacement.
-    new_text = re.sub(r"\{\{([^{}]*?)\}\}", repl, text, flags=re.DOTALL)
+    # DOTALL allows placeholder text broken across lines/runs to be matched once
+    # the paragraph text has been joined together.
+    new_text = re.sub(r"\{\{(.*?)\}\}", repl, text, flags=re.DOTALL)
 
-    # Second pass - tolerate malformed/nested placeholders by replacing raw keys
-    # directly. Sort by length so *_VALUE is handled before shorter aliases.
-    for norm_key, replacement in sorted(lookup.items(), key=lambda item: len(item[0]), reverse=True):
-        if norm_key and norm_key in new_text:
-            new_text = new_text.replace(norm_key, replacement)
-
-    # Third pass - handle any remaining nested placeholder shape such as
-    # {{A{{B}} by repeatedly replacing the innermost recognised token if possible.
-    def nested_repl(match):
-        body = match.group(1)
-        body_norm = normalise_placeholder_key(body)
-        if body_norm in lookup:
-            return lookup[body_norm]
-        for norm_key, replacement in sorted(lookup.items(), key=lambda item: len(item[0]), reverse=True):
-            if norm_key and norm_key in body_norm:
-                return replacement
-        return MISSING_PPT_VALUE
-
-    for _ in range(3):
-        updated = re.sub(r"\{\{(.*?)\}\}", nested_repl, new_text, flags=re.DOTALL)
-        if updated == new_text:
-            break
-        new_text = updated
-
-    # Remove orphan braces that can remain after raw-key replacement.
-    new_text = new_text.replace("{{", "").replace("}}", "")
-
-    # Add a small separator if two replacements became glued together in the same
-    # text box. This mainly helps malformed adjacent NAME/VALUE placeholders.
-    new_text = re.sub(r"([A-Za-z)])(\d+(?:\.\d+)?%)", r"\1 \2", new_text)
-    new_text = re.sub(r"(%)([A-Za-z])", r"\1 \2", new_text)
+    # Direct replacement fallback for any simple placeholders missed above.
+    for norm_key, replacement in lookup.items():
+        new_text = new_text.replace("{{" + norm_key + "}}", replacement)
 
     new_text = replace_template_default_literals(new_text)
     return new_text
+
 
 def replace_text_in_shape(shape, placeholder_values: Dict[str, Any]) -> None:
     if hasattr(shape, "text_frame"):
@@ -1782,8 +1750,6 @@ def build_grouped_stacked_modular_ppt(
 
         cursor_y += section["height"] + spacing
 
-    # Run replacement only after all sections have been copied into the final One Pager slide.
-    # This mirrors the Slide Deck flow and ensures grouped/nested section placeholders are processed.
     replace_placeholders_on_slide(output_slide, placeholder_values or {})
 
     campaign_name = clean_text(placeholder_values.get("CAMPAIGN_NAME")) if placeholder_values else ""
