@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.1-site-table-slide-deck-filtering"
+APP_VERSION = "12.9.2-section-availability"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -952,6 +952,125 @@ def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def has_ppt_value(mapped: Dict[str, Any], key: str) -> bool:
+    value = mapped.get(key)
+    return value is not None and clean_text(value) not in ["", MISSING_PPT_VALUE, MISSING_DISPLAY_VALUE]
+
+
+def build_section_availability(
+    mapped: Dict[str, Any],
+    detected: Dict[str, pd.DataFrame],
+) -> Dict[str, Any]:
+    """Return data availability for data-driven modular sections only.
+
+    Manual/add-on sections are intentionally excluded:
+    - ATTENTION_SCORE
+    - HAPPYDEMICS
+    - LUMEN_RESULTS
+    - BRAND_STUDY
+    - LEARNING_RECOMMENDATIONS
+    """
+
+    has_campaign_kpis = all([
+        has_ppt_value(mapped, "CAMPAIGN_NAME"),
+        has_ppt_value(mapped, "DELIVERED_IMPRESSIONS"),
+        has_ppt_value(mapped, "PERFORMANCE_CTR"),
+        has_ppt_value(mapped, "PERFORMANCE_ENGAGEMENT_RATE"),
+        has_ppt_value(mapped, "PERFORMANCE_VCR"),
+    ])
+
+    has_site_rankings = any([
+        has_ppt_value(mapped, "TOP_TITLES_CTR_1_NAME"),
+        has_ppt_value(mapped, "TOP_TITLES_ER_1_NAME"),
+        has_ppt_value(mapped, "TOP_TITLES_VCR_1_NAME"),
+    ])
+
+    has_market_rankings = any([
+        has_ppt_value(mapped, "TOP_MARKETS_CTR_1_NAME"),
+        has_ppt_value(mapped, "TOP_MARKETS_ER_1_NAME"),
+        has_ppt_value(mapped, "TOP_MARKETS_VCR_1_NAME"),
+    ])
+
+    has_market_data = has_market_rankings or has_ppt_value(mapped, "CAMPAIGN_MARKETS")
+
+    format_df = detected.get("format")
+    has_creative_data = has_ppt_value(mapped, "CAMPAIGN_FORMATS") or format_df is not None
+
+    has_creative_performance_data = False
+    if format_df is not None:
+        has_creative_performance_data = any([
+            find_col(format_df, "ctr") is not None,
+            find_col(format_df, "engagement_rate") is not None,
+            find_col(format_df, "vcr") is not None,
+            find_col(format_df, "impressions") is not None,
+        ])
+
+    availability = {
+        "TITLE_PERFORMANCE": {
+            "label": "Title Performance",
+            "available": has_campaign_kpis,
+            "note": "" if has_campaign_kpis else "No Data Available",
+        },
+        "MARKET_PERFORMANCE": {
+            "label": "Market Performance",
+            "available": has_market_data,
+            "note": "" if has_market_data else "No Data Available",
+        },
+        "TOP_TITLES_MARKETS": {
+            "label": "Top Titles & Markets",
+            "available": has_site_rankings or has_market_data,
+            "note": "Market Data Missing" if has_site_rankings and not has_market_data else ("No Data Available" if not has_site_rankings and not has_market_data else ""),
+        },
+        "CREATIVE_OVERVIEW": {
+            "label": "Creative Overview",
+            "available": has_creative_data,
+            "note": "" if has_creative_data else "No Data Available",
+        },
+        "CREATIVE_PERFORMANCE": {
+            "label": "Creative Performance",
+            "available": has_creative_performance_data,
+            "note": "" if has_creative_performance_data else "No Data Available",
+        },
+    }
+
+    selection_labels = []
+    ordered = [
+        (1, "TITLE_PERFORMANCE"),
+        (2, "MARKET_PERFORMANCE"),
+        (3, "TOP_TITLES_MARKETS"),
+        (4, "CREATIVE_OVERVIEW"),
+        (5, "CREATIVE_PERFORMANCE"),
+    ]
+
+    for number, section_id in ordered:
+        item = availability[section_id]
+        label = item["label"]
+        if item["note"]:
+            label = f"{label} ({item['note']})"
+        selection_labels.append({
+            "number": number,
+            "section_id": section_id,
+            "label": label,
+            "available": item["available"],
+            "note": item["note"],
+        })
+
+    return {
+        "sections": availability,
+        "selection_labels": selection_labels,
+        "notes": {
+            "manual_sections": [
+                "ATTENTION_SCORE",
+                "HAPPYDEMICS",
+                "LUMEN_RESULTS",
+                "BRAND_STUDY",
+                "LEARNING_RECOMMENDATIONS",
+            ],
+            "rule": "Only sections 1-5 are data-checked. Manual/add-on sections are not marked as unavailable.",
+        },
+    }
+
+
 def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
     if not RULES_MASTER_PATH.exists():
         return None
@@ -1057,6 +1176,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
     mapped = fill_missing_for_ppt(mapped)
     display_values = build_display_values(mapped)
     validation = validate_mapped_values(mapped)
+    section_availability = build_section_availability(mapped, detected)
 
     diagnostics = {
         "detected_tables": list(detected.keys()),
@@ -1069,6 +1189,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         "mapped_values": mapped,
         "display_values": display_values,
         "validation": validation,
+        "section_availability": section_availability,
         "diagnostics": diagnostics,
     }
 
