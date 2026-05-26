@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.6-stable-market-fallbacks"
+APP_VERSION = "12.9.8-robust-placeholder-normalisation"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -1439,29 +1439,64 @@ def find_main_group_shape(slide):
     return max(candidates, key=lambda c: c["area"])["shape"]
 
 
-def replace_placeholders_in_text(text: str, placeholder_values: Dict[str, Any]) -> str:
-    """Replace placeholders in a full text string.
+def normalise_placeholder_key(value: Any) -> str:
+    """Normalise PPT placeholder keys for robust lookup.
 
-    Some PowerPoint text boxes split a placeholder across multiple runs, for
-    example {{TOP_TITLES_CTR_1_NAM + E}}. Run-by-run replacement cannot see the
-    full token, so this function is used on the complete paragraph text first.
+    PowerPoint can insert line breaks or split text runs inside tokens, for example
+    {{TOP_TITLES_CTR_1_NAM
+E}}. The template still visually represents the same
+    placeholder, but a direct string replace will fail. This normalises the token
+    content so split/line-wrapped placeholders resolve correctly.
+    """
+    key = str(value or "")
+    key = key.strip().strip("{}").upper()
+    key = re.sub(r"[^A-Z0-9_]+", "", key)
+    return key
+
+
+def build_placeholder_lookup(placeholder_values: Dict[str, Any]) -> Dict[str, str]:
+    lookup: Dict[str, str] = {}
+
+    for key, value in (placeholder_values or {}).items():
+        if str(key).startswith("__"):
+            continue
+
+        norm_key = normalise_placeholder_key(key)
+        if not norm_key:
+            continue
+
+        replacement = MISSING_PPT_VALUE if value is None or clean_text(value) == "" else str(value)
+        lookup[norm_key] = replacement
+
+    return lookup
+
+
+def replace_placeholders_in_text(text: str, placeholder_values: Dict[str, Any]) -> str:
+    """Replace placeholders in a full text string, including split tokens.
+
+    This handles both normal tokens like {{TOP_TITLES_CTR_1_NAME}} and tokens
+    where PowerPoint has inserted spaces/newlines inside the braces. Unknown
+    placeholders are converted to N/A as a final safety net.
     """
     if not text:
         return text
 
-    new_text = text
+    lookup = build_placeholder_lookup(placeholder_values)
 
-    for key, value in placeholder_values.items():
-        if str(key).startswith("__"):
-            continue
-        placeholder = "{{" + str(key).strip("{}") + "}}"
-        replacement = MISSING_PPT_VALUE if value is None or clean_text(value) == "" else str(value)
-        new_text = new_text.replace(placeholder, replacement)
+    def repl(match):
+        raw_key = match.group(1)
+        norm_key = normalise_placeholder_key(raw_key)
+        return lookup.get(norm_key, MISSING_PPT_VALUE)
 
-    # Final safety pass: no visible template defaults or raw placeholders.
-    new_text = re.sub(r"\{\{[^{}]+\}\}", MISSING_PPT_VALUE, new_text)
+    # DOTALL allows placeholder text broken across lines/runs to be matched once
+    # the paragraph text has been joined together.
+    new_text = re.sub(r"\{\{(.*?)\}\}", repl, text, flags=re.DOTALL)
+
+    # Direct replacement fallback for any simple placeholders missed above.
+    for norm_key, replacement in lookup.items():
+        new_text = new_text.replace("{{" + norm_key + "}}", replacement)
+
     new_text = replace_template_default_literals(new_text)
-
     return new_text
 
 
