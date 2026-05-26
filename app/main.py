@@ -1439,27 +1439,55 @@ def find_main_group_shape(slide):
     return max(candidates, key=lambda c: c["area"])["shape"]
 
 
+def replace_placeholders_in_text(text: str, placeholder_values: Dict[str, Any]) -> str:
+    """Replace placeholders in a full text string.
+
+    Some PowerPoint text boxes split a placeholder across multiple runs, for
+    example {{TOP_TITLES_CTR_1_NAM + E}}. Run-by-run replacement cannot see the
+    full token, so this function is used on the complete paragraph text first.
+    """
+    if not text:
+        return text
+
+    new_text = text
+
+    for key, value in placeholder_values.items():
+        if str(key).startswith("__"):
+            continue
+        placeholder = "{{" + str(key).strip("{}") + "}}"
+        replacement = MISSING_PPT_VALUE if value is None or clean_text(value) == "" else str(value)
+        new_text = new_text.replace(placeholder, replacement)
+
+    # Final safety pass: no visible template defaults or raw placeholders.
+    new_text = re.sub(r"\{\{[^{}]+\}\}", MISSING_PPT_VALUE, new_text)
+    new_text = replace_template_default_literals(new_text)
+
+    return new_text
+
+
 def replace_text_in_shape(shape, placeholder_values: Dict[str, Any]) -> None:
     if hasattr(shape, "text_frame"):
         for paragraph in shape.text_frame.paragraphs:
-            for run in paragraph.runs:
+            runs = list(paragraph.runs)
+            if not runs:
+                continue
+
+            # First try replacing across the whole paragraph. This handles
+            # placeholders split across multiple PowerPoint text runs.
+            original_full_text = "".join(run.text or "" for run in runs)
+            replaced_full_text = replace_placeholders_in_text(original_full_text, placeholder_values)
+
+            if replaced_full_text != original_full_text:
+                runs[0].text = replaced_full_text
+                for run in runs[1:]:
+                    run.text = ""
+                continue
+
+            # Fallback for simple run-contained placeholders.
+            for run in runs:
                 if not run.text:
                     continue
-
-                new_text = run.text
-
-                for key, value in placeholder_values.items():
-                    if str(key).startswith("__"):
-                        continue
-                    placeholder = "{{" + str(key).strip("{}") + "}}"
-                    replacement = MISSING_PPT_VALUE if value is None else str(value)
-                    new_text = new_text.replace(placeholder, replacement)
-
-                # Final safety pass: no visible template defaults or raw placeholders.
-                new_text = re.sub(r"\{\{[^{}]+\}\}", MISSING_PPT_VALUE, new_text)
-                new_text = replace_template_default_literals(new_text)
-
-                run.text = new_text
+                run.text = replace_placeholders_in_text(run.text, placeholder_values)
 
     if hasattr(shape, "shapes"):
         for subshape in shape.shapes:
