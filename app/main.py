@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.8-robust-placeholder-normalisation"
+APP_VERSION = "12.9.9-combined-section-placeholder-aliases"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -1467,6 +1467,17 @@ def build_placeholder_lookup(placeholder_values: Dict[str, Any]) -> Dict[str, st
 
         replacement = MISSING_PPT_VALUE if value is None or clean_text(value) == "" else str(value)
         lookup[norm_key] = replacement
+
+        # PowerPoint sometimes clips or splits text-box placeholders in narrow
+        # table cells, especially inside the combined Top Titles & Markets block.
+        # In those templates, a visible token can resolve as *_NAM or *_VALU
+        # instead of *_NAME / *_VALUE. Mirror each populated key to those safe
+        # aliases so the combined section does not fall back to N/A while the
+        # standalone sections still work normally.
+        if norm_key.endswith("_NAME"):
+            lookup.setdefault(norm_key[:-1], replacement)  # *_NAM
+        if norm_key.endswith("_VALUE"):
+            lookup.setdefault(norm_key[:-1], replacement)  # *_VALU
 
     return lookup
 
