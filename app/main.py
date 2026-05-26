@@ -1,620 +1,1521 @@
-"""
-PCA Automation Generator - Modular Builder Stable
-Version: v12.1.0-modular-deck-filtering
-
-Adds:
-- Modular Slide Deck filtering
-- SECTION_ID slide filtering
-- SECTION_ID text box removal
-- Deck modes: full / matching / custom
-- Reuse One Pager section selections
-- Preserve current stable One Pager workflow
-
-Expected Render/GitHub structure:
-- /templates/exec_summary_master.pptx
-- /templates/exec_summary_slide_deck_master.pptx
-- /assets/PCA_GPT_Rules_Master.xlsx
-
-Core API endpoints:
-- GET  /health
-- POST /validate-eoc
-- POST /generate-exec-summary
-- POST /generate-modular-one-pager
-- POST /generate-slide-deck
-- POST /generate-one-pager-and-slides
-"""
-
-from __future__ import annotations
-
 import base64
-import copy
-import io
 import json
+import math
 import os
 import re
 import tempfile
+import traceback
 import uuid
-import zipfile
-from dataclasses import dataclass
-from datetime import datetime
+from copy import deepcopy
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from openpyxl import load_workbook
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
-from pptx.enum.shapes import MSO_SHAPE_TYPE
-from pptx.util import Inches, Pt
-from starlette.responses import JSONResponse
 
-
-# =============================================================================
-# Config
-# =============================================================================
-
-APP_VERSION = "v12.1.0-modular-deck-filtering"
-
-ROOT_DIR = Path(__file__).resolve().parent
-TEMPLATE_PATH = Path(os.getenv("TEMPLATE_PATH", ROOT_DIR / "templates" / "exec_summary_master.pptx"))
-SLIDE_DECK_TEMPLATE_PATH = Path(
-    os.getenv("SLIDE_DECK_TEMPLATE_PATH", ROOT_DIR / "templates" / "exec_summary_slide_deck_master.pptx")
-)
-RULES_MASTER_PATH = Path(os.getenv("RULES_MASTER_PATH", ROOT_DIR / "assets" / "PCA_GPT_Rules_Master.xlsx"))
-
-MAX_RETURN_FILE_BYTES = int(os.getenv("MAX_RETURN_FILE_BYTES", str(10 * 1024 * 1024)))
-PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+APP_VERSION = "12.9.0-slide-deck-filtering"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
 
-SECTION_ID_PREFIX = "SECTION_ID:"
+PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+MAX_RETURN_FILE_BYTES = 10 * 1024 * 1024
 
-# Canonical modular section IDs.
-SECTION_ALIASES = {
-    "title overview": "TITLE_OVERVIEW",
-    "title_overview": "TITLE_OVERVIEW",
-    "exec summary": "TITLE_OVERVIEW",
-    "executive summary": "TITLE_OVERVIEW",
-    "overview": "TITLE_OVERVIEW",
-    "title performance": "TITLE_PERFORMANCE",
-    "title_performance": "TITLE_PERFORMANCE",
-    "market performance": "MARKET_PERFORMANCE",
-    "market_performance": "MARKET_PERFORMANCE",
-    "markets": "MARKET_PERFORMANCE",
-    "top titles markets": "TOP_TITLES_MARKETS",
-    "top_titles_markets": "TOP_TITLES_MARKETS",
-    "titles markets": "TOP_TITLES_MARKETS",
-    "creative overview": "CREATIVE_OVERVIEW",
-    "creative_overview": "CREATIVE_OVERVIEW",
-    "creative performance": "CREATIVE_PERFORMANCE",
-    "creative_performance": "CREATIVE_PERFORMANCE",
-    "attention score": "ATTENTION_SCORE",
-    "attention_score": "ATTENTION_SCORE",
-    "attention": "ATTENTION_SCORE",
-    "happydemics": "HAPPYDEMICS",
-    "brand study": "BRAND_STUDY",
-    "brand_study": "BRAND_STUDY",
-    "lumen results": "LUMEN_RESULTS",
-    "lumen_results": "LUMEN_RESULTS",
-    "lumen learnings": "LUMEN_LEARNINGS",
-    "lumen_learnings": "LUMEN_LEARNINGS",
-    "learning recommendations": "LEARNING_RECOMMENDATIONS",
-    "learning_recommendations": "LEARNING_RECOMMENDATIONS",
-    "learnings": "LEARNING_RECOMMENDATIONS",
-}
+EMU_PER_PX = 9525
+REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
-DEFAULT_BASE_SECTIONS = ["TITLE_OVERVIEW"]
+app = FastAPI(title="PCA Automation Generator", version=APP_VERSION)
 
+BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent
 
-# =============================================================================
-# FastAPI
-# =============================================================================
-
-app = FastAPI(
-    title="PCA Automation Generator",
-    version=APP_VERSION,
-    description="Validate EOC Excel files and generate PCA One Pagers / filtered Slide Decks.",
+MODULAR_TEMPLATE_PATH = Path(
+    os.getenv("MODULAR_TEMPLATE_PATH", BASE_DIR / "templates" / "modular_sections_master.pptx")
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+SLIDE_DECK_TEMPLATE_PATH = Path(
+    os.getenv("SLIDE_DECK_TEMPLATE_PATH", BASE_DIR / "templates" / "slide_deck_master.pptx")
 )
 
+SECTION_REGISTRY_PATH = Path(
+    os.getenv("SECTION_REGISTRY_PATH", BASE_DIR / "section_registry" / "section_registry.json")
+)
 
-# =============================================================================
-# Request / Response Models
-# =============================================================================
+RULES_MASTER_PATH = Path(
+    os.getenv("RULES_MASTER_PATH", ROOT_DIR / "assets" / "PCA_GPT_Rules_Master.xlsx")
+)
+
+PUBLIC_BASE_URL = os.getenv(
+    "PUBLIC_BASE_URL",
+    "https://pca-modular-builder-v12.onrender.com"
+)
+
+GENERATED_FILES_DIR = Path(
+    os.getenv("GENERATED_FILES_DIR", tempfile.gettempdir())
+) / "pca_modular_generated"
+
+GENERATED_FILES_DIR.mkdir(parents=True, exist_ok=True)
+
 
 class OpenAIFileRef(BaseModel):
     id: Optional[str] = None
     name: Optional[str] = None
     mime_type: Optional[str] = None
     download_link: Optional[str] = None
-    data: Optional[str] = None
 
 
-class ValidateEocRequest(BaseModel):
-    openaiFileIdRefs: Optional[List[OpenAIFileRef]] = None
-    file_base64: Optional[str] = None
-    filename: Optional[str] = None
-
-
-class GenerateExecSummaryRequest(BaseModel):
-    openaiFileIdRefs: Optional[List[OpenAIFileRef]] = None
-    file_base64: Optional[str] = None
-    filename: Optional[str] = None
+class FileRefsPayload(BaseModel):
+    openaiFileIdRefs: List[OpenAIFileRef] = Field(...)
     exec_summary: Optional[str] = None
-    section_selections: Optional[List[str]] = None
-    one_pager_sections: Optional[List[str]] = None
-    output_filename: Optional[str] = None
 
 
-class GenerateSlideDeckRequest(BaseModel):
-    openaiFileIdRefs: Optional[List[OpenAIFileRef]] = None
-    file_base64: Optional[str] = None
-    filename: Optional[str] = None
+class ModularOnePagerRequest(BaseModel):
+    selected_sections: List[str] = Field(default_factory=list)
+    placeholder_values: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    top_margin_px: int = 100
+    bottom_margin_px: int = 100
+    section_spacing_px: int = 60
+
+
+class ModularOnePagerFromEocRequest(BaseModel):
+    openaiFileIdRefs: List[OpenAIFileRef] = Field(...)
+    selected_sections: List[str] = Field(default_factory=list)
     exec_summary: Optional[str] = None
-    section_selections: Optional[List[str]] = None
-    one_pager_sections: Optional[List[str]] = None
-    deck_mode: str = Field(default="matching", description="full, matching, or custom")
-    custom_deck_sections: Optional[List[str]] = None
-    output_filename: Optional[str] = None
+    top_margin_px: int = 100
+    bottom_margin_px: int = 100
+    section_spacing_px: int = 60
 
 
-class GenerateOnePagerAndSlidesRequest(BaseModel):
-    openaiFileIdRefs: Optional[List[OpenAIFileRef]] = None
-    file_base64: Optional[str] = None
-    filename: Optional[str] = None
-    exec_summary: Optional[str] = None
-    section_selections: Optional[List[str]] = None
-    one_pager_sections: Optional[List[str]] = None
+class SlideDeckFromEocRequest(BaseModel):
+    openaiFileIdRefs: List[OpenAIFileRef] = Field(...)
+    selected_sections: List[str] = Field(default_factory=list)
+    one_pager_sections: List[str] = Field(default_factory=list)
+    custom_deck_sections: List[str] = Field(default_factory=list)
     deck_mode: str = "matching"
-    custom_deck_sections: Optional[List[str]] = None
-    one_pager_filename: Optional[str] = None
-    slide_deck_filename: Optional[str] = None
+    exec_summary: Optional[str] = None
 
 
-# =============================================================================
-# Utility helpers
-# =============================================================================
+@app.get("/")
+def read_root():
+    return {
+        "status": "healthy",
+        "message": "PCA Automation Generator API is running successfully.",
+        "mcp_path": "/mcp"
+    }
 
-def now_stamp() -> str:
-    return datetime.now().strftime("%d%m%Y")
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "app_version": APP_VERSION,
+        "modular_template_exists": MODULAR_TEMPLATE_PATH.exists(),
+        "slide_deck_template_exists": SLIDE_DECK_TEMPLATE_PATH.exists(),
+        "section_registry_exists": SECTION_REGISTRY_PATH.exists(),
+        "rules_master_exists": RULES_MASTER_PATH.exists(),
+        "generated_files_dir": str(GENERATED_FILES_DIR),
+    }
 
 
 def clean_text(value: Any) -> str:
     if value is None:
         return ""
-    text = str(value).replace("\r", " ").replace("\n", " ").strip()
-    text = re.sub(r"\s+", " ", text)
-    return text
-
-
-def safe_display(value: Any) -> str:
-    text = clean_text(value)
-    return text if text else MISSING_DISPLAY_VALUE
-
-
-def safe_ppt(value: Any) -> str:
-    text = clean_text(value)
-    return text if text else MISSING_PPT_VALUE
-
-
-def slug_filename(text: str, fallback: str = "Campaign") -> str:
-    text = clean_text(text) or fallback
-    text = re.sub(r"[^A-Za-z0-9 _.-]", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text[:80] or fallback
-
-
-def canonical_section_id(section: str) -> str:
-    raw = clean_text(section)
-    if not raw:
-        return ""
-    raw = raw.replace(SECTION_ID_PREFIX, "")
-    raw = raw.strip()
-    upper = re.sub(r"[^A-Za-z0-9]+", "_", raw).strip("_").upper()
-    alias_key = raw.lower().strip()
-    return SECTION_ALIASES.get(alias_key, upper)
-
-
-def canonical_section_list(sections: Optional[Sequence[str]], include_base: bool = True) -> List[str]:
-    seen = set()
-    output: List[str] = []
-
-    if include_base:
-        for item in DEFAULT_BASE_SECTIONS:
-            if item not in seen:
-                seen.add(item)
-                output.append(item)
-
-    for section in sections or []:
-        sid = canonical_section_id(section)
-        if sid and sid not in seen:
-            seen.add(sid)
-            output.append(sid)
-    return output
-
-
-def normalise_deck_mode(deck_mode: Optional[str]) -> str:
-    mode = clean_text(deck_mode).lower()
-    if mode not in {"full", "matching", "custom"}:
-        raise HTTPException(status_code=400, detail="deck_mode must be one of: full, matching, custom")
-    return mode
-
-
-def format_percent(value: Any) -> str:
-    if value is None or value == "":
-        return MISSING_PPT_VALUE
     try:
-        number = float(str(value).replace("%", "").replace(",", ""))
-        if number <= 1:
-            number *= 100
-        return f"{number:.2f}%".rstrip("0").rstrip(".") + "%" if False else f"{number:.2f}%"
+        if pd.isna(value):
+            return ""
     except Exception:
-        return safe_ppt(value)
+        pass
+    return re.sub(r"\s+", " ", str(value)).strip()
 
 
-def format_integer(value: Any) -> str:
-    if value is None or value == "":
-        return MISSING_PPT_VALUE
+def normalize_header(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
+
+
+def normalize_key(value: Any) -> str:
+    return normalize_header(value).replace(" ", "_")
+
+
+def normalize_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9%./()\- ]+", " ", clean_text(value).lower()).strip()
+
+
+def clean_dimension_label(value: Any) -> str:
+    value = clean_text(value)
+    value = re.sub(r"\bMISCRL\b", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"([a-z])([A-Z])", r"\1 \2", value)
+    value = re.sub(r"\bDisplay\s*Animated\b", "Display Animated", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bIn\s*Situ\s*Video\b", "In Situ Video", value, flags=re.IGNORECASE)
+    value = re.sub(r"[-_]+", " - ", value)
+    value = re.sub(r"\s+-\s+-\s+", " - ", value)
+    value = re.sub(r"\s{2,}", " ", value)
+    return value.strip(" -")
+
+
+def safe_number(value: Any) -> Optional[float]:
     try:
-        return f"{int(round(float(str(value).replace(',', '')))):,}"
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = (
+                value.replace(",", "")
+                .replace("£", "")
+                .replace("$", "")
+                .replace("€", "")
+                .replace("%", "")
+                .strip()
+            )
+        num = float(value)
+        if math.isnan(num) or math.isinf(num):
+            return None
+        return num
     except Exception:
-        return safe_ppt(value)
+        return None
 
 
-def format_currency(value: Any, symbol: str = "£") -> str:
-    if value is None or value == "":
-        return MISSING_PPT_VALUE
-    try:
-        return f"{symbol}{float(str(value).replace(',', '').replace(symbol, '')):,.2f}"
-    except Exception:
-        return safe_ppt(value)
+def abs_number(value: Any) -> Optional[float]:
+    num = safe_number(value)
+    return abs(num) if num is not None else None
 
 
-def file_response_payload(filename: str, content: bytes) -> Dict[str, Any]:
-    if len(content) > MAX_RETURN_FILE_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Generated PPT is {len(content)} bytes and exceeds MAX_RETURN_FILE_BYTES={MAX_RETURN_FILE_BYTES}.",
-        )
-    return {
-        "filename": filename,
-        "mime_type": PPTX_MIME,
-        "data": base64.b64encode(content).decode("utf-8"),
-        "size_bytes": len(content),
-    }
-
-
-def decode_uploaded_excel(req: Any) -> Tuple[bytes, str]:
-    """Supports file_base64 and OpenAI action-style file refs with embedded base64 data.
-
-    In production OpenAI Actions, file download may be proxied by the platform. This function is
-    intentionally conservative: it supports embedded `data`/`file_base64` and returns a clear error
-    if the action layer has not provided bytes.
-    """
-    if getattr(req, "file_base64", None):
-        filename = getattr(req, "filename", None) or "EOC_Report.xlsx"
-        return base64.b64decode(req.file_base64), filename
-
-    refs = getattr(req, "openaiFileIdRefs", None) or []
-    for ref in refs:
-        if ref.data:
-            filename = ref.name or getattr(req, "filename", None) or "EOC_Report.xlsx"
-            return base64.b64decode(ref.data), filename
-
-    raise HTTPException(
-        status_code=400,
-        detail="No Excel bytes supplied. Provide file_base64 or openaiFileIdRefs with embedded data.",
-    )
-
-
-# =============================================================================
-# EOC validation / parsing
-# =============================================================================
-
-@dataclass
-class ParsedEOC:
-    display_values: Dict[str, str]
-    mapped_values: Dict[str, str]
-    raw_summary: Dict[str, Any]
-
-
-def read_excel_sheets(file_bytes: bytes) -> Dict[str, pd.DataFrame]:
-    try:
-        with io.BytesIO(file_bytes) as stream:
-            return pd.read_excel(stream, sheet_name=None, header=None, dtype=object)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Unable to read Excel file: {exc}") from exc
-
-
-def dataframe_to_search_blob(df: pd.DataFrame, max_rows: int = 80, max_cols: int = 30) -> str:
-    subset = df.iloc[:max_rows, :max_cols].copy()
-    values: List[str] = []
-    for row in subset.values.tolist():
-        values.extend(clean_text(cell) for cell in row if clean_text(cell))
-    return " | ".join(values)
-
-
-def find_value_near_label(df: pd.DataFrame, label_aliases: Sequence[str], right_limit: int = 6, down_limit: int = 2) -> str:
-    aliases = [a.lower() for a in label_aliases]
-    rows, cols = df.shape
-    for r in range(rows):
-        for c in range(cols):
-            cell = clean_text(df.iat[r, c]).lower()
-            if not cell:
-                continue
-            if any(alias in cell for alias in aliases):
-                for dc in range(1, right_limit + 1):
-                    if c + dc < cols:
-                        value = clean_text(df.iat[r, c + dc])
-                        if value and not any(alias in value.lower() for alias in aliases):
-                            return value
-                for dr in range(1, down_limit + 1):
-                    if r + dr < rows:
-                        value = clean_text(df.iat[r + dr, c])
-                        if value and not any(alias in value.lower() for alias in aliases):
-                            return value
-    return ""
-
-
-def detect_header_row(df: pd.DataFrame, required_any: Sequence[str], max_scan_rows: int = 60) -> Optional[int]:
-    required = [x.lower() for x in required_any]
-    max_r = min(max_scan_rows, df.shape[0])
-    for r in range(max_r):
-        row_text = " | ".join(clean_text(v).lower() for v in df.iloc[r].tolist())
-        hits = sum(1 for item in required if item in row_text)
-        if hits >= 2:
-            return r
-    return None
-
-
-def table_from_header(df: pd.DataFrame, header_row: int) -> pd.DataFrame:
-    header = [clean_text(x) or f"Column_{i}" for i, x in enumerate(df.iloc[header_row].tolist())]
-    data = df.iloc[header_row + 1 :].copy()
-    data.columns = header
-    data = data.dropna(how="all")
-    return data
-
-
-def get_column(table: pd.DataFrame, aliases: Sequence[str]) -> Optional[str]:
-    alias_norm = [a.lower() for a in aliases]
-    for col in table.columns:
-        c = clean_text(col).lower()
-        if any(a == c or a in c for a in alias_norm):
-            return col
-    return None
-
-
-def coerce_number(value: Any) -> Optional[float]:
+def format_number(value: Optional[float], decimals: int = 0) -> Optional[str]:
     if value is None:
         return None
+    if decimals == 0:
+        return f"{int(round(value)):,}"
+    return f"{value:,.{decimals}f}"
+
+
+def format_currency(value: Optional[float], symbol: str = "€") -> Optional[str]:
+    if value is None:
+        return None
+    return f"{symbol}{value:,.2f}"
+
+
+def format_percent(value: Any) -> Optional[str]:
+    if isinstance(value, str) and "%" in value:
+        return clean_text(value)
+
+    num = safe_number(value)
+    if num is None:
+        return None
+
+    if num <= 1:
+        num = num * 100
+
+    return f"{round(num, 2)}%"
+
+
+def parse_date_from_any(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
     text = clean_text(value)
     if not text:
         return None
-    text = text.replace("%", "").replace(",", "").replace("£", "").replace("$", "").replace("€", "")
+
     try:
-        return float(text)
+        dt = pd.to_datetime(text, errors="coerce")
+        if pd.notna(dt):
+            py_dt = dt.to_pydatetime()
+            if 2000 <= py_dt.year <= 2100:
+                return py_dt
+    except Exception:
+        pass
+
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), "%Y-%m-%d")
+        except Exception:
+            pass
+
+    match = re.search(r"\b(\d{1,2}[/-]\d{1,2}[/-]20\d{2})\b", text)
+    if match:
+        try:
+            dt = pd.to_datetime(match.group(1), dayfirst=True, errors="coerce")
+            if pd.notna(dt):
+                return dt.to_pydatetime()
+        except Exception:
+            pass
+
+    return None
+
+
+def format_date_short(start_dt: Optional[datetime], end_dt: Optional[datetime]) -> Optional[str]:
+    if start_dt and end_dt:
+        return f"{start_dt.strftime('%d %b')} - {end_dt.strftime('%d %b')}"
+    return None
+
+
+def format_date_full(start_dt: Optional[datetime], end_dt: Optional[datetime]) -> Optional[str]:
+    if start_dt and end_dt:
+        if start_dt.year == end_dt.year:
+            return f"{start_dt.strftime('%d %B')} - {end_dt.strftime('%d %B %Y')}"
+        return f"{start_dt.strftime('%d %B %Y')} - {end_dt.strftime('%d %B %Y')}"
+    return None
+
+
+def format_quarter_from_date(end_dt: Optional[datetime]) -> Optional[str]:
+    if not end_dt:
+        return None
+    q = ((end_dt.month - 1) // 3) + 1
+    return f"Q{q} {end_dt.year}"
+
+
+def fill_missing_for_ppt(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    for key, value in mapped.items():
+        if value is None or clean_text(value) == "":
+            mapped[key] = MISSING_PPT_VALUE
+    return mapped
+
+
+def build_display_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: MISSING_DISPLAY_VALUE if value == MISSING_PPT_VALUE else value
+        for key, value in mapped.items()
+    }
+
+
+def first_non_empty(series: pd.Series) -> Any:
+    for value in series:
+        if clean_text(value) != "":
+            return value
+    return None
+
+
+def is_blank_row(values: List[Any]) -> bool:
+    return all(clean_text(v) == "" for v in values)
+
+
+MARKET_CODE_MAP = {
+    "france": "FR", "french": "FR", "fr": "FR",
+    "united kingdom": "UK", "uk": "UK", "gb": "UK", "great britain": "UK", "britain": "UK",
+    "italy": "IT", "italian": "IT", "it": "IT",
+    "spain": "ES", "spanish": "ES", "es": "ES",
+    "germany": "DE", "german": "DE", "de": "DE",
+    "netherlands": "NL", "dutch": "NL", "nl": "NL",
+    "belgium": "BE", "be": "BE",
+    "switzerland": "CH", "ch": "CH",
+    "austria": "AT", "at": "AT",
+    "portugal": "PT", "pt": "PT",
+    "ireland": "IE", "ie": "IE",
+    "usa": "US", "us": "US", "united states": "US", "united states of america": "US",
+    "canada": "CA", "ca": "CA",
+    "australia": "AU", "au": "AU",
+    "japan": "JP", "jp": "JP",
+    "hong kong": "HK", "hk": "HK",
+    "singapore": "SG", "sg": "SG",
+    "thailand": "TH", "thai": "TH", "th": "TH",
+    "taiwan": "TW", "tw": "TW",
+    "china": "CN", "cn": "CN",
+    "korea": "KR", "south korea": "KR", "kr": "KR",
+    "india": "IN", "in": "IN",
+    "mexico": "MX", "mx": "MX",
+    "brazil": "BR", "br": "BR",
+}
+
+
+def normalise_market_label(value: Any) -> str:
+    raw = clean_dimension_label(value)
+    if not raw:
+        return ""
+
+    raw = re.sub(
+        r"\b(total|totals|overall|summary|market|markets|country|countries)\b",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    raw = raw.strip(" ,-")
+
+    if not raw:
+        return ""
+
+    parts = re.split(r"[,;/|]+", raw)
+    out = []
+
+    for part in parts:
+        part = clean_text(part).strip(" -")
+        if not part:
+            continue
+
+        key = part.lower()
+        code = MARKET_CODE_MAP.get(key)
+
+        if not code:
+            if re.fullmatch(r"[A-Za-z]{2,3}", part):
+                code = part.upper()
+            else:
+                code = part.upper() if len(part) <= 3 else part
+
+        if code and code not in out:
+            out.append(code)
+
+    return ", ".join(out)
+
+
+ALIASES = {
+    "campaign": ["campaign", "campaign name"],
+    "client_brand": ["client", "brand", "advertiser", "brand / client"],
+    "impressions": ["impressions", "delivered impressions", "served impressions"],
+    "ctr": ["ctr", "click through rate", "click-through rate"],
+    "engagement_rate": ["engagement rate", "engagement %", "er", "total er", "overall er"],
+    "vcr": ["video completion rate", "vcr", "completed view rate", "video % complete"],
+    "on_screen": ["mobkoi on screen", "on screen", "on-screen", "mrc viewability", "viewability", "viewable rate"],
+    "mobkoi_on_screen": ["mobkoi on screen"],
+    "mrc_viewability": ["mrc viewability"],
+    "spend": ["actual spend", "spend", "total spend", "media spend"],
+    "sold_paid_units": ["sold paid units"],
+    "delivered_overall_av_units": ["delivered overall av units", "delivered overall av (units)"],
+    "delivery_incl_av": ["delivery percentage incl av", "delivery percentage (incl av)"],
+    "delivered_av_amount": ["delivered av amount currency", "delivered av amount (currency)", "worth of added value"],
+    "site": ["site", "publisher", "domain", "environment", "property", "placement", "title", "inventory", "app", "website"],
+    "geo": ["geo", "market", "markets", "country", "countries", "region", "territory", "location", "locale"],
+    "format": ["format", "formats", "creative", "creative format", "ad format", "unit type", "product", "product type", "placement type"],
+    "date": ["date", "report date", "served date", "live date"],
+}
+
+
+def header_match_score(header: str, aliases: List[str]) -> int:
+    norm = normalize_header(header)
+    best = 0
+
+    for alias in aliases:
+        alias_norm = normalize_header(alias)
+        if norm == alias_norm:
+            best = max(best, 100)
+        elif alias_norm in norm:
+            best = max(best, 85)
+        elif norm in alias_norm:
+            best = max(best, 60)
+
+    return best
+
+
+def find_col(df: pd.DataFrame, key: str) -> Optional[str]:
+    aliases = ALIASES.get(key, [key])
+    best_col = None
+    best_score = 0
+
+    for col in df.columns:
+        score = header_match_score(str(col), aliases)
+        if score > best_score:
+            best_score = score
+            best_col = col
+
+    return best_col if best_score >= 60 else None
+
+
+def score_header_row(row_values: List[Any]) -> int:
+    keywords = [
+        "campaign", "impressions", "ctr", "engagement", "vcr", "completion",
+        "spend", "site", "publisher", "domain", "environment", "property",
+        "placement", "title", "inventory", "app", "website",
+        "geo", "market", "markets", "country", "countries", "region", "territory", "location", "locale",
+        "format", "formats", "creative", "product", "unit type",
+        "date", "report date", "served date", "live date",
+        "sold paid units", "delivered overall av", "delivery percentage", "mrc viewability",
+    ]
+
+    score = 0
+    for cell in row_values:
+        text = normalize_text(cell)
+        for kw in keywords:
+            if kw in text:
+                score += 1
+
+    return score
+
+
+def find_candidate_header_rows(df: pd.DataFrame) -> List[int]:
+    candidates = []
+
+    for i in range(min(120, len(df))):
+        score = score_header_row(df.iloc[i].tolist())
+        if score >= 3:
+            candidates.append(i)
+
+    deduped = []
+    for idx in candidates:
+        if not deduped or idx - deduped[-1] > 2:
+            deduped.append(idx)
+
+    return deduped
+
+
+def build_block_from_header(df: pd.DataFrame, header_row: int) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    temp = df.iloc[header_row:].copy()
+    if temp.empty:
+        return pd.DataFrame()
+
+    temp.columns = [clean_text(c) for c in temp.iloc[0]]
+    temp = temp[1:].reset_index(drop=True)
+    temp = temp.dropna(axis=1, how="all")
+
+    rows = []
+
+    for _, row in temp.iterrows():
+        row_vals = row.tolist()
+        if is_blank_row(row_vals):
+            break
+        rows.append(row_vals)
+
+    if not rows:
+        return pd.DataFrame(columns=temp.columns)
+
+    block = pd.DataFrame(rows, columns=temp.columns)
+
+    header_norm = [normalize_header(c) for c in block.columns]
+    keep_rows = []
+
+    for _, row in block.iterrows():
+        row_norm = [normalize_header(v) for v in row.tolist()]
+        same_count = 0
+
+        for a, b in zip(header_norm[:12], row_norm[:12]):
+            if a and b and a == b:
+                same_count += 1
+
+        keep_rows.append(same_count < 3)
+
+    return block[pd.Series(keep_rows).values].reset_index(drop=True)
+
+
+def classify_table(df: pd.DataFrame) -> str:
+    if df is None or df.empty:
+        return "unknown"
+
+    site_col = find_col(df, "site")
+    geo_col = find_col(df, "geo")
+    format_col = find_col(df, "format")
+
+    has_ctr = find_col(df, "ctr") is not None
+    has_er = find_col(df, "engagement_rate") is not None
+    has_vcr = find_col(df, "vcr") is not None
+    has_impressions = find_col(df, "impressions") is not None
+
+    delivery_hits = sum([
+        1 if find_col(df, "sold_paid_units") else 0,
+        1 if find_col(df, "delivered_overall_av_units") else 0,
+        1 if find_col(df, "delivery_incl_av") else 0,
+        1 if find_col(df, "delivered_av_amount") else 0,
+    ])
+
+    if delivery_hits >= 2:
+        return "campaign_delivery"
+
+    if site_col and (has_ctr or has_er or has_vcr):
+        return "site"
+
+    if geo_col and has_impressions:
+        return "geo"
+
+    if format_col and has_impressions:
+        return "format"
+
+    date_col = find_col(df, "date")
+    if date_col:
+        col_data = df[date_col]
+        if isinstance(col_data, pd.DataFrame):
+            col_data = col_data.iloc[:, 0]
+        sample = [parse_date_from_any(v) for v in col_data.head(10).values]
+        if any(v is not None for v in sample):
+            return "date"
+
+    kpi_hits = sum([
+        1 if find_col(df, "campaign") else 0,
+        1 if has_impressions else 0,
+        1 if has_ctr else 0,
+        1 if has_er else 0,
+        1 if has_vcr else 0,
+        1 if (find_col(df, "mobkoi_on_screen") or find_col(df, "mrc_viewability") or find_col(df, "on_screen")) else 0,
+        1 if find_col(df, "spend") else 0,
+    ])
+
+    if kpi_hits >= 3:
+        return "campaign_kpi_summary"
+
+    if site_col:
+        return "site"
+    if geo_col:
+        return "geo"
+    if format_col:
+        return "format"
+
+    return "unknown"
+
+
+def table_quality_score(df: pd.DataFrame, table_type: str) -> int:
+    if df is None or df.empty:
+        return -999
+
+    score = min(len(df.columns), 20) + min(len(df), 10)
+
+    weights = {
+        "campaign_kpi_summary": ["campaign", "impressions", "ctr", "engagement_rate", "vcr", "spend"],
+        "campaign_delivery": ["sold_paid_units", "delivered_overall_av_units", "delivery_incl_av", "delivered_av_amount"],
+        "site": ["site", "ctr", "engagement_rate", "vcr"],
+        "geo": ["geo", "impressions"],
+        "format": ["format", "impressions"],
+        "date": ["date"],
+    }
+
+    for key in weights.get(table_type, []):
+        if find_col(df, key):
+            score += 12 if table_type == "campaign_delivery" else 10
+
+    if table_type == "campaign_kpi_summary":
+        if find_col(df, "mobkoi_on_screen"):
+            score += 12
+        elif find_col(df, "mrc_viewability"):
+            score += 6
+
+    return score
+
+
+def detect_tables(sheets: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    candidates_by_type: Dict[str, List[Tuple[int, pd.DataFrame]]] = {
+        "campaign_kpi_summary": [],
+        "campaign_delivery": [],
+        "site": [],
+        "geo": [],
+        "format": [],
+        "date": [],
+    }
+
+    for _, raw_df in sheets.items():
+        if raw_df is None or raw_df.empty:
+            continue
+
+        for header_row in find_candidate_header_rows(raw_df):
+            block = build_block_from_header(raw_df, header_row)
+            if block.empty:
+                continue
+
+            table_type = classify_table(block)
+            if table_type == "unknown":
+                continue
+
+            score = table_quality_score(block, table_type)
+            candidates_by_type[table_type].append((score, block))
+
+    detected: Dict[str, pd.DataFrame] = {}
+
+    for table_type, candidates in candidates_by_type.items():
+        if candidates:
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            detected[table_type] = candidates[0][1]
+
+    return detected
+
+
+def scan_workbook_texts(sheets: Dict[str, pd.DataFrame]) -> List[str]:
+    texts = []
+
+    for df in sheets.values():
+        if df is None or df.empty:
+            continue
+
+        for row in df.head(20).values:
+            for cell in row:
+                text = clean_text(cell)
+                if text:
+                    texts.append(text)
+
+    return texts
+
+
+def extract_dates(
+    sheets: Dict[str, pd.DataFrame],
+    detected: Dict[str, pd.DataFrame],
+    filename: str = "",
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    date_df = detected.get("date")
+
+    if date_df is not None:
+        date_col = find_col(date_df, "date")
+        if date_col:
+            col_data = date_df[date_col]
+            if isinstance(col_data, pd.DataFrame):
+                col_data = col_data.iloc[:, 0]
+
+            vals = [parse_date_from_any(v) for v in col_data.tolist()]
+            vals = [v for v in vals if v]
+            if vals:
+                return min(vals), max(vals)
+
+    for text in scan_workbook_texts(sheets):
+        if "report date" in normalize_text(text):
+            dt = parse_date_from_any(text)
+            if dt:
+                return dt - timedelta(days=6), dt
+
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", filename or "")
+    if match:
+        end_dt = parse_date_from_any(match.group(1))
+        if end_dt:
+            return end_dt - timedelta(days=6), end_dt
+
+    return None, None
+
+
+def extract_kpi_value(df: pd.DataFrame, key: str) -> Any:
+    col = find_col(df, key)
+    if not col:
+        return None
+
+    col_data = df[col]
+    if isinstance(col_data, pd.DataFrame):
+        col_data = col_data.iloc[:, 0]
+
+    return first_non_empty(col_data)
+
+
+def extract_client_name(
+    sheets: Dict[str, pd.DataFrame],
+    detected: Dict[str, pd.DataFrame],
+    filename: str = "",
+) -> Optional[str]:
+    for table_name in ["campaign_kpi_summary", "campaign_delivery"]:
+        df = detected.get(table_name)
+        if df is not None:
+            col = find_col(df, "client_brand")
+            if col:
+                val = first_non_empty(df[col])
+                if clean_text(val):
+                    return clean_text(val)
+
+    for text in scan_workbook_texts(sheets):
+        low = normalize_text(text)
+        if "client:" in low or "brand:" in low:
+            parts = text.split(":")
+            if len(parts) > 1:
+                candidate = clean_text(parts[-1])
+                if candidate:
+                    return candidate
+
+    kpi_df = detected.get("campaign_kpi_summary")
+    if kpi_df is not None:
+        campaign_val = clean_text(extract_kpi_value(kpi_df, "campaign"))
+        if campaign_val:
+            for sep in [" - ", " | ", "_"]:
+                if sep in campaign_val:
+                    return clean_text(campaign_val.split(sep)[0])
+            return campaign_val.split()[0] if campaign_val.split() else None
+
+    if filename:
+        base = Path(filename).stem
+        if " - " in base:
+            return clean_text(base.split(" - ")[0])
+
+    return None
+
+
+def join_dimension_values(df: pd.DataFrame, dim_key: str) -> Optional[str]:
+    col = find_col(df, dim_key)
+    if not col:
+        return None
+
+    col_data = df[col]
+    if isinstance(col_data, pd.DataFrame):
+        col_data = col_data.iloc[:, 0]
+
+    if dim_key == "geo":
+        raw_vals = []
+        for v in col_data.tolist():
+            cleaned = normalise_market_label(v)
+            if cleaned:
+                raw_vals.extend([x.strip() for x in cleaned.split(",") if x.strip()])
+    else:
+        raw_vals = [clean_dimension_label(v) for v in col_data.tolist() if clean_dimension_label(v)]
+
+    blocked = {
+        "total", "totals", "overall", "summary",
+        "campaign", "format", "formats",
+        "market", "markets"
+    }
+
+    raw_vals = [
+        v for v in raw_vals
+        if normalize_header(v) not in blocked
+    ]
+
+    if not raw_vals:
+        return None
+
+    base = raw_vals[0]
+    cleaned = [base]
+
+    for val in raw_vals[1:]:
+        if dim_key == "geo":
+            candidate = val
+        else:
+            parts_base = base.split(" - ")
+            parts_val = val.split(" - ")
+
+            suffix = parts_val
+
+            for i in range(min(len(parts_base), len(parts_val))):
+                if parts_base[i] != parts_val[i]:
+                    suffix = parts_val[i:]
+                    break
+            else:
+                if len(parts_val) > len(parts_base):
+                    suffix = parts_val[len(parts_base):]
+                else:
+                    suffix = [val]
+
+            candidate = clean_dimension_label(" - ".join([p for p in suffix if p]))
+
+        if candidate:
+            cleaned.append(candidate)
+
+    seen = []
+    final = []
+
+    for v in cleaned:
+        if v not in seen:
+            seen.append(v)
+            final.append(v)
+
+    return ", ".join(final)
+
+
+def extract_top_titles(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> Dict[str, Any]:
+    site_col = find_col(df, "site")
+    metric_col = find_col(df, metric_key)
+
+    if not site_col or not metric_col:
+        return {}
+
+    site_data = df[site_col]
+    if isinstance(site_data, pd.DataFrame):
+        site_data = site_data.iloc[:, 0]
+
+    metric_data = df[metric_col]
+    if isinstance(metric_data, pd.DataFrame):
+        metric_data = metric_data.iloc[:, 0]
+
+    temp = pd.DataFrame({"site": site_data, "metric": metric_data})
+    temp["site_clean"] = temp["site"].apply(clean_text)
+    temp["site_norm"] = temp["site_clean"].apply(lambda x: normalize_header(x))
+    temp["metric"] = temp["metric"].apply(safe_number)
+    temp = temp.dropna(subset=["metric"])
+
+    blocked_exact = {
+        "site", "publisher", "domain", "environment", "property",
+        "placement", "title", "inventory", "app", "website",
+        "total", "totals", "overall", "average", "avg", "summary",
+        "campaign", "campaign name", "market", "format", "creative",
+    }
+
+    temp = temp[~temp["site_norm"].isin(blocked_exact)]
+    temp = temp[temp["site_clean"] != ""]
+
+    if temp.empty:
+        return {}
+
+    temp = temp.sort_values(by="metric", ascending=False).head(max_rank)
+
+    prefix = {
+        "ctr": "TOP_TITLES_CTR",
+        "engagement_rate": "TOP_TITLES_ER",
+        "vcr": "TOP_TITLES_VCR",
+    }[metric_key]
+
+    out = {}
+
+    for idx, (_, row) in enumerate(temp.iterrows(), start=1):
+        out[f"{prefix}_{idx}_NAME"] = row["site_clean"]
+        out[f"{prefix}_{idx}_VALUE"] = format_percent(row["metric"])
+
+    return out
+
+
+def extract_top_markets(df: pd.DataFrame, metric_key: str, max_rank: int = 5) -> Dict[str, Any]:
+    geo_col = find_col(df, "geo")
+    metric_col = find_col(df, metric_key)
+
+    if not geo_col or not metric_col:
+        return {}
+
+    geo_data = df[geo_col]
+    if isinstance(geo_data, pd.DataFrame):
+        geo_data = geo_data.iloc[:, 0]
+
+    metric_data = df[metric_col]
+    if isinstance(metric_data, pd.DataFrame):
+        metric_data = metric_data.iloc[:, 0]
+
+    temp = pd.DataFrame({"market": geo_data, "metric": metric_data})
+    temp["market_clean"] = temp["market"].apply(normalise_market_label)
+    temp["market_norm"] = temp["market_clean"].apply(lambda x: normalize_header(x))
+    temp["metric"] = temp["metric"].apply(safe_number)
+    temp = temp.dropna(subset=["metric"])
+
+    blocked_exact = {
+        "geo", "market", "markets", "country", "countries", "region",
+        "territory", "location", "locale", "total", "totals", "overall",
+        "average", "avg", "summary", "campaign", "campaign name",
+    }
+
+    temp = temp[~temp["market_norm"].isin(blocked_exact)]
+    temp = temp[temp["market_clean"] != ""]
+
+    if temp.empty:
+        return {}
+
+    temp = temp.sort_values(by="metric", ascending=False).head(max_rank)
+
+    prefix = {
+        "ctr": "TOP_MARKETS_CTR",
+        "engagement_rate": "TOP_MARKETS_ER",
+        "vcr": "TOP_MARKETS_VCR",
+    }[metric_key]
+
+    out = {}
+
+    for idx, (_, row) in enumerate(temp.iterrows(), start=1):
+        out[f"{prefix}_{idx}_NAME"] = row["market_clean"]
+        out[f"{prefix}_{idx}_VALUE"] = format_percent(row["metric"])
+
+    return out
+
+
+def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    required_core = [
+        "CAMPAIGN_NAME",
+        "DELIVERED_IMPRESSIONS",
+        "PERFORMANCE_CTR",
+        "PERFORMANCE_ENGAGEMENT_RATE",
+        "PERFORMANCE_VCR",
+        "LIVE_DATES_FULL",
+    ]
+
+    missing_required = [
+        k for k in required_core
+        if not mapped.get(k) or mapped.get(k) == MISSING_PPT_VALUE
+    ]
+
+    warnings = []
+    for key, label in [
+        ("CLIENT_NAME", "CLIENT_NAME missing"),
+        ("CAMPAIGN_MARKETS", "CAMPAIGN_MARKETS missing"),
+        ("CAMPAIGN_FORMATS", "CAMPAIGN_FORMATS missing"),
+        ("TOP_TITLES_CTR_1_NAME", "Top Titles CTR missing"),
+        ("TOP_TITLES_VCR_1_NAME", "Top Titles VCR missing"),
+        ("TOP_TITLES_ER_1_NAME", "Top Titles ER missing"),
+        ("TOP_MARKETS_CTR_1_NAME", "Top Markets CTR missing"),
+        ("TOP_MARKETS_VCR_1_NAME", "Top Markets VCR missing"),
+        ("TOP_MARKETS_ER_1_NAME", "Top Markets ER missing"),
+    ]:
+        if mapped.get(key) == MISSING_PPT_VALUE:
+            warnings.append(label)
+
+    return {
+        "is_valid": len(missing_required) == 0,
+        "missing_required": missing_required,
+        "warnings": warnings,
+    }
+
+
+def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
+    if not RULES_MASTER_PATH.exists():
+        return None
+
+    try:
+        xls = pd.ExcelFile(RULES_MASTER_PATH, engine="openpyxl")
+        return {
+            sheet: pd.read_excel(RULES_MASTER_PATH, sheet_name=sheet, engine="openpyxl")
+            for sheet in xls.sheet_names
+        }
     except Exception:
         return None
 
 
-def extract_top_performers(table: pd.DataFrame, metric_aliases: Sequence[str], name_aliases: Sequence[str]) -> List[Dict[str, str]]:
-    name_col = get_column(table, name_aliases)
-    metric_col = get_column(table, metric_aliases)
-    if not name_col or not metric_col:
-        return []
+def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> Dict[str, Any]:
+    rules = load_rules_master()
+    detected = detect_tables(sheets)
 
-    rows = []
-    for _, row in table.iterrows():
-        name = clean_text(row.get(name_col))
-        metric_raw = row.get(metric_col)
-        metric = coerce_number(metric_raw)
-        if not name or name.lower() in {"total", "grand total"} or metric is None:
+    kpi_df = detected.get("campaign_kpi_summary")
+    delivery_df = detected.get("campaign_delivery")
+    site_df = detected.get("site")
+    geo_df = detected.get("geo")
+    format_df = detected.get("format")
+
+    start_dt, end_dt = extract_dates(sheets, detected, filename)
+    client_name = extract_client_name(sheets, detected, filename)
+
+    mapped: Dict[str, Any] = {}
+
+    if kpi_df is not None:
+        mapped["CAMPAIGN_NAME"] = clean_text(extract_kpi_value(kpi_df, "campaign"))
+        mapped["DELIVERED_IMPRESSIONS"] = format_number(safe_number(extract_kpi_value(kpi_df, "impressions")), 0)
+        mapped["PERFORMANCE_CTR"] = format_percent(extract_kpi_value(kpi_df, "ctr"))
+        mapped["PERFORMANCE_ENGAGEMENT_RATE"] = format_percent(extract_kpi_value(kpi_df, "engagement_rate"))
+        mapped["PERFORMANCE_VCR"] = format_percent(extract_kpi_value(kpi_df, "vcr"))
+
+        on_screen_val = None
+        for key in ["mobkoi_on_screen", "mrc_viewability", "on_screen"]:
+            col = find_col(kpi_df, key)
+            if col:
+                col_data = kpi_df[col]
+                if isinstance(col_data, pd.DataFrame):
+                    col_data = col_data.iloc[:, 0]
+                on_screen_val = first_non_empty(col_data)
+                break
+
+        mapped["PERFORMANCE_ON_SCREEN"] = format_percent(on_screen_val)
+        mapped["CAMPAIGN_BUDGET"] = format_currency(safe_number(extract_kpi_value(kpi_df, "spend")))
+    else:
+        mapped["CAMPAIGN_NAME"] = None
+        mapped["DELIVERED_IMPRESSIONS"] = None
+        mapped["PERFORMANCE_CTR"] = None
+        mapped["PERFORMANCE_ENGAGEMENT_RATE"] = None
+        mapped["PERFORMANCE_VCR"] = None
+        mapped["PERFORMANCE_ON_SCREEN"] = None
+        mapped["CAMPAIGN_BUDGET"] = None
+
+    if delivery_df is not None:
+        io_val = safe_number(extract_kpi_value(delivery_df, "sold_paid_units"))
+        av_units_val = abs_number(extract_kpi_value(delivery_df, "delivered_overall_av_units"))
+        av_amount_val = abs_number(extract_kpi_value(delivery_df, "delivered_av_amount"))
+
+        mapped["IO_OVERALL_IMPRESSIONS"] = format_number(io_val, 0)
+        mapped["DELIVERED_OVERALL_AV_UNITS"] = format_number(av_units_val, 0)
+        mapped["DELIVERY_WITH_AV_PERCENT"] = format_percent(extract_kpi_value(delivery_df, "delivery_incl_av"))
+        mapped["ADDED_VALUE_WORTH"] = format_currency(av_amount_val)
+        mapped["ADDED_VALUE_IMPRESSIONS"] = format_number(av_units_val, 0)
+    else:
+        mapped["IO_OVERALL_IMPRESSIONS"] = None
+        mapped["DELIVERED_OVERALL_AV_UNITS"] = None
+        mapped["DELIVERY_WITH_AV_PERCENT"] = None
+        mapped["ADDED_VALUE_WORTH"] = None
+        mapped["ADDED_VALUE_IMPRESSIONS"] = None
+
+    mapped["CLIENT_NAME"] = client_name
+    mapped["CLIENT"] = client_name
+    mapped["CAMPAIGN_FORMATS"] = join_dimension_values(format_df, "format") if format_df is not None else None
+    mapped["CAMPAIGN_MARKETS"] = join_dimension_values(geo_df, "geo") if geo_df is not None else None
+    mapped["LIVE_DATES_SHORT"] = format_date_short(start_dt, end_dt)
+    mapped["LIVE_DATES_FULL"] = format_date_full(start_dt, end_dt)
+    mapped["CAMPAIGN_PERIOD"] = format_quarter_from_date(end_dt)
+
+    if site_df is not None:
+        mapped.update(extract_top_titles(site_df, "ctr", 5))
+        mapped.update(extract_top_titles(site_df, "engagement_rate", 5))
+        mapped.update(extract_top_titles(site_df, "vcr", 5))
+
+    if geo_df is not None:
+        mapped.update(extract_top_markets(geo_df, "ctr", 5))
+        mapped.update(extract_top_markets(geo_df, "engagement_rate", 5))
+        mapped.update(extract_top_markets(geo_df, "vcr", 5))
+
+    for metric_prefix in ["TOP_TITLES_CTR", "TOP_TITLES_ER", "TOP_TITLES_VCR"]:
+        for i in range(1, 6):
+            mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
+            mapped.setdefault(f"{metric_prefix}_{i}_VALUE", None)
+
+    for metric_prefix in ["TOP_MARKETS_CTR", "TOP_MARKETS_ER", "TOP_MARKETS_VCR"]:
+        for i in range(1, 6):
+            mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
+            mapped.setdefault(f"{metric_prefix}_{i}_VALUE", None)
+
+    mapped = fill_missing_for_ppt(mapped)
+    display_values = build_display_values(mapped)
+    validation = validate_mapped_values(mapped)
+
+    diagnostics = {
+        "detected_tables": list(detected.keys()),
+        "table_columns": {k: [str(c) for c in v.columns] for k, v in detected.items()},
+        "rules_master_loaded": rules is not None,
+        "version": APP_VERSION,
+    }
+
+    return {
+        "mapped_values": mapped,
+        "display_values": display_values,
+        "validation": validation,
+        "diagnostics": diagnostics,
+    }
+
+
+async def download_openai_file(file_ref: OpenAIFileRef, dest_dir: Path) -> Path:
+    if not file_ref.download_link:
+        raise HTTPException(status_code=400, detail="Missing download_link in openaiFileIdRefs.")
+
+    safe_name = file_ref.name or "uploaded_eoc.xlsx"
+    safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", safe_name)
+    output_path = dest_dir / safe_name
+
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        response = await client.get(file_ref.download_link)
+        response.raise_for_status()
+        output_path.write_bytes(response.content)
+
+    return output_path
+
+
+def read_uploaded_eoc(path: Path) -> Dict[str, pd.DataFrame]:
+    try:
+        return pd.read_excel(path, sheet_name=None, header=None, engine="openpyxl")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read EOC Excel file: {exc}")
+
+
+def load_section_registry() -> Dict[str, Any]:
+    if not SECTION_REGISTRY_PATH.exists():
+        raise HTTPException(status_code=500, detail=f"Section registry not found at {SECTION_REGISTRY_PATH}")
+
+    return json.loads(SECTION_REGISTRY_PATH.read_text(encoding="utf-8"))
+
+
+def get_shape_text(shape) -> str:
+    if not hasattr(shape, "text"):
+        return ""
+    return shape.text or ""
+
+
+def is_section_id_shape(shape) -> bool:
+    return get_shape_text(shape).strip().startswith("SECTION_ID:")
+
+
+def extract_section_id_from_slide(slide) -> Optional[str]:
+    for shape in slide.shapes:
+        text = get_shape_text(shape).strip()
+        if text.startswith("SECTION_ID:"):
+            return text.replace("SECTION_ID:", "").strip()
+    return None
+
+
+def detect_template_sections(prs: Presentation) -> Dict[str, int]:
+    detected = {}
+
+    for index, slide in enumerate(prs.slides):
+        section_id = extract_section_id_from_slide(slide)
+        if section_id:
+            detected[section_id] = index
+
+    return detected
+
+
+def ordered_selected_sections(registry: Dict[str, Any], selected_sections: List[str]) -> List[str]:
+    selected_clean = [s.strip().upper() for s in selected_sections if s.strip()]
+    final_sections = []
+
+    for section_id, meta in registry.items():
+        if meta.get("required") is True:
+            final_sections.append(section_id)
+
+    for section_id in selected_clean:
+        if section_id not in final_sections:
+            final_sections.append(section_id)
+
+    final_sections = [section_id for section_id in final_sections if section_id in registry]
+    final_sections.sort(key=lambda section_id: registry[section_id].get("default_order", 999))
+
+    return final_sections
+
+
+def find_main_group_shape(slide):
+    candidates = []
+
+    for shape in slide.shapes:
+        if is_section_id_shape(shape):
             continue
-        rows.append((name, metric, metric_raw))
 
-    rows.sort(key=lambda x: x[1], reverse=True)
-    return [
-        {"name": name, "value": format_percent(metric_raw)}
-        for name, _, metric_raw in rows[:3]
-    ]
+        is_group = shape.shape_type == 6
+        area = int(shape.width) * int(shape.height)
 
+        candidates.append({
+            "shape": shape,
+            "is_group": is_group,
+            "area": area
+        })
 
-def parse_eoc(file_bytes: bytes) -> ParsedEOC:
-    sheets = read_excel_sheets(file_bytes)
-    all_blob = " | ".join(dataframe_to_search_blob(df) for df in sheets.values())
+    if not candidates:
+        return None
 
-    campaign = ""
-    client = ""
-    markets = ""
-    formats = ""
-    live_dates = ""
-    spend = ""
-    impressions = ""
-    ctr = ""
-    engagement_rate = ""
-    vcr = ""
-    on_screen = ""
+    group_candidates = [c for c in candidates if c["is_group"]]
 
-    candidate_tables: List[pd.DataFrame] = []
+    if group_candidates:
+        return max(group_candidates, key=lambda c: c["area"])["shape"]
 
-    for _, df in sheets.items():
-        campaign = campaign or find_value_near_label(df, ["campaign", "campaign name"])
-        client = client or find_value_near_label(df, ["client", "advertiser", "brand"])
-        markets = markets or find_value_near_label(df, ["geo", "market", "markets", "country"])
-        formats = formats or find_value_near_label(df, ["format", "formats", "product"])
-        live_dates = live_dates or find_value_near_label(df, ["live dates", "dates", "start date", "end date"])
-        spend = spend or find_value_near_label(df, ["spend", "budget", "campaign budget"])
-        impressions = impressions or find_value_near_label(df, ["delivered impressions", "impressions", "delivered overall"])
-        ctr = ctr or find_value_near_label(df, ["ctr", "click through rate"])
-        engagement_rate = engagement_rate or find_value_near_label(df, ["engagement rate", "engagement"])
-        vcr = vcr or find_value_near_label(df, ["video completion rate", "vcr"])
-        on_screen = on_screen or find_value_near_label(df, ["mobkoi on screen", "on screen", "viewability", "mrc viewability"])
-
-        header_row = detect_header_row(
-            df,
-            required_any=["site", "publisher", "title", "geo", "market", "ctr", "engagement", "vcr", "impressions"],
-        )
-        if header_row is not None:
-            table = table_from_header(df, header_row)
-            if len(table.columns) >= 3:
-                candidate_tables.append(table)
-
-    top_ctr: List[Dict[str, str]] = []
-    top_engagement: List[Dict[str, str]] = []
-    top_vcr: List[Dict[str, str]] = []
-
-    for table in candidate_tables:
-        name_aliases = ["site", "publisher", "title", "property", "placement", "app", "website"]
-        top_ctr = top_ctr or extract_top_performers(table, ["ctr", "click through rate"], name_aliases)
-        top_engagement = top_engagement or extract_top_performers(table, ["engagement rate", "engagement"], name_aliases)
-        top_vcr = top_vcr or extract_top_performers(table, ["video completion rate", "vcr"], name_aliases)
-
-    # Fallback campaign name from workbook blob if no explicit label is found.
-    if not campaign:
-        campaign_match = re.search(r"([A-Z][A-Za-z0-9 &'-]{2,80})", all_blob)
-        campaign = campaign_match.group(1) if campaign_match else "Campaign"
-
-    mapped_values = {
-        "{{CAMPAIGN_NAME}}": safe_ppt(campaign),
-        "{{CLIENT_NAME}}": safe_ppt(client),
-        "{{LIVE_DATES_SHORT}}": safe_ppt(live_dates),
-        "{{LIVE_DATES_FULL}}": safe_ppt(live_dates),
-        "{{MARKETS}}": safe_ppt(markets),
-        "{{FORMATS}}": safe_ppt(formats),
-        "{{CAMPAIGN_BUDGET}}": format_currency(spend) if spend else MISSING_PPT_VALUE,
-        "{{DELIVERED_IMPRESSIONS}}": format_integer(impressions) if impressions else MISSING_PPT_VALUE,
-        "{{PERFORMANCE_CTR}}": format_percent(ctr) if ctr else MISSING_PPT_VALUE,
-        "{{PERFORMANCE_ENGAGEMENT_RATE}}": format_percent(engagement_rate) if engagement_rate else MISSING_PPT_VALUE,
-        "{{PERFORMANCE_VCR}}": format_percent(vcr) if vcr else MISSING_PPT_VALUE,
-        "{{PERFORMANCE_VIEWABILITY}}": format_percent(on_screen) if on_screen else MISSING_PPT_VALUE,
-        "{{TOP_CTR_1}}": top_ctr[0]["name"] if len(top_ctr) > 0 else MISSING_PPT_VALUE,
-        "{{TOP_CTR_1_VALUE}}": top_ctr[0]["value"] if len(top_ctr) > 0 else MISSING_PPT_VALUE,
-        "{{TOP_CTR_2}}": top_ctr[1]["name"] if len(top_ctr) > 1 else MISSING_PPT_VALUE,
-        "{{TOP_CTR_2_VALUE}}": top_ctr[1]["value"] if len(top_ctr) > 1 else MISSING_PPT_VALUE,
-        "{{TOP_CTR_3}}": top_ctr[2]["name"] if len(top_ctr) > 2 else MISSING_PPT_VALUE,
-        "{{TOP_CTR_3_VALUE}}": top_ctr[2]["value"] if len(top_ctr) > 2 else MISSING_PPT_VALUE,
-        "{{TOP_ENGAGEMENT_1}}": top_engagement[0]["name"] if len(top_engagement) > 0 else MISSING_PPT_VALUE,
-        "{{TOP_ENGAGEMENT_1_VALUE}}": top_engagement[0]["value"] if len(top_engagement) > 0 else MISSING_PPT_VALUE,
-        "{{TOP_VCR_1}}": top_vcr[0]["name"] if len(top_vcr) > 0 else MISSING_PPT_VALUE,
-        "{{TOP_VCR_1_VALUE}}": top_vcr[0]["value"] if len(top_vcr) > 0 else MISSING_PPT_VALUE,
-    }
-
-    display_values = {
-        "Campaign": safe_display(campaign),
-        "Client": safe_display(client),
-        "Live Dates": safe_display(live_dates),
-        "Markets": safe_display(markets),
-        "Formats": safe_display(formats),
-        "Campaign Budget": mapped_values["{{CAMPAIGN_BUDGET}}"],
-        "Delivered Impressions": mapped_values["{{DELIVERED_IMPRESSIONS}}"],
-        "CTR": mapped_values["{{PERFORMANCE_CTR}}"],
-        "Engagement Rate": mapped_values["{{PERFORMANCE_ENGAGEMENT_RATE}}"],
-        "VCR": mapped_values["{{PERFORMANCE_VCR}}"],
-        "On Screen": mapped_values["{{PERFORMANCE_VIEWABILITY}}"],
-    }
-
-    raw_summary = {
-        "top_ctr": top_ctr,
-        "top_engagement": top_engagement,
-        "top_vcr": top_vcr,
-        "sheets": list(sheets.keys()),
-    }
-
-    return ParsedEOC(display_values=display_values, mapped_values=mapped_values, raw_summary=raw_summary)
+    return max(candidates, key=lambda c: c["area"])["shape"]
 
 
-def build_exec_summary(parsed: ParsedEOC) -> str:
-    campaign = parsed.display_values.get("Campaign", MISSING_DISPLAY_VALUE)
-    markets = parsed.display_values.get("Markets", MISSING_DISPLAY_VALUE)
-    impressions = parsed.display_values.get("Delivered Impressions", MISSING_DISPLAY_VALUE)
-    ctr = parsed.display_values.get("CTR", MISSING_DISPLAY_VALUE)
-    engagement = parsed.display_values.get("Engagement Rate", MISSING_DISPLAY_VALUE)
-    vcr = parsed.display_values.get("VCR", MISSING_DISPLAY_VALUE)
+def replace_text_in_shape(shape, placeholder_values: Dict[str, Any]) -> None:
+    if hasattr(shape, "text_frame"):
+        for paragraph in shape.text_frame.paragraphs:
+            for run in paragraph.runs:
+                if not run.text:
+                    continue
 
-    return (
-        f"{campaign} delivered a premium mobile campaign across {markets}, generating {impressions} delivered impressions. "
-        f"Performance was led by CTR at {ctr}, engagement rate at {engagement}, and video completion at {vcr}, "
-        "with the strongest results coming from the top-performing environments identified in the EOC report."
+                new_text = run.text
+
+                for key, value in placeholder_values.items():
+                    placeholder = "{{" + str(key).strip("{}") + "}}"
+                    replacement = MISSING_PPT_VALUE if value is None else str(value)
+                    new_text = new_text.replace(placeholder, replacement)
+
+                run.text = new_text
+
+    if hasattr(shape, "shapes"):
+        for subshape in shape.shapes:
+            replace_text_in_shape(subshape, placeholder_values)
+
+
+def replace_placeholders_on_slide(slide, placeholder_values: Dict[str, Any]) -> None:
+    if not placeholder_values:
+        return
+
+    for shape in slide.shapes:
+        replace_text_in_shape(shape, placeholder_values)
+
+
+def create_output_presentation_with_source_theme(source_template_path: Path, slide_height: int) -> Presentation:
+    output_prs = Presentation(str(source_template_path))
+    output_prs.slide_height = slide_height
+
+    slide_id_list = output_prs.slides._sldIdLst
+
+    for slide_id in list(slide_id_list):
+        output_prs.part.drop_rel(slide_id.rId)
+        slide_id_list.remove(slide_id)
+
+    return output_prs
+
+
+def collect_relationship_ids_from_element(element) -> List[str]:
+    rel_ids = set()
+
+    for node in element.iter():
+        for attr_name, attr_value in node.attrib.items():
+            if attr_name.startswith("{" + REL_NS + "}"):
+                rel_ids.add(attr_value)
+
+    return list(rel_ids)
+
+
+def remap_relationship_ids_in_element(element, rel_id_map: Dict[str, str]) -> None:
+    for node in element.iter():
+        for attr_name, attr_value in list(node.attrib.items()):
+            if attr_value in rel_id_map:
+                node.attrib[attr_name] = rel_id_map[attr_value]
+
+
+def copy_relationships_for_element(source_slide, target_slide, copied_element) -> Dict[str, str]:
+    rel_id_map = {}
+    rel_ids = collect_relationship_ids_from_element(copied_element)
+
+    for old_rid in rel_ids:
+        try:
+            source_rel = source_slide.part.rels[old_rid]
+        except KeyError:
+            continue
+
+        try:
+            if getattr(source_rel, "is_external", False):
+                new_rid = target_slide.part.relate_to(
+                    source_rel.target_ref,
+                    source_rel.reltype,
+                    is_external=True
+                )
+            else:
+                new_rid = target_slide.part.relate_to(
+                    source_rel.target_part,
+                    source_rel.reltype
+                )
+
+            rel_id_map[old_rid] = new_rid
+
+        except Exception:
+            continue
+
+    remap_relationship_ids_in_element(copied_element, rel_id_map)
+
+    return rel_id_map
+
+
+def copy_group_to_slide_relationship_safe(source_shape, source_slide, target_slide, new_left: int, new_top: int):
+    copied_element = deepcopy(source_shape.element)
+
+    copy_relationships_for_element(
+        source_slide=source_slide,
+        target_slide=target_slide,
+        copied_element=copied_element
     )
 
+    target_slide.shapes._spTree.insert_element_before(copied_element, "p:extLst")
 
-# =============================================================================
-# PowerPoint replacement helpers
-# =============================================================================
+    copied_shape = list(target_slide.shapes)[-1]
+
+    try:
+        copied_shape.left = new_left
+        copied_shape.top = new_top
+    except Exception:
+        pass
+
+    return copied_shape
+
+
+def px_to_emu(px: int) -> int:
+    return int(px * EMU_PER_PX)
+
+
+def calculate_section_left(section_id: str, section_width: int, slide_width: int) -> int:
+    if section_id == "TITLE_OVERVIEW":
+        return int(slide_width - section_width)
+
+    return int((slide_width - section_width) / 2)
+
+
+def safe_filename(value: str) -> str:
+    value = clean_text(value) or "Campaign"
+    return re.sub(r'[\\/*?:"<>|]', "", value)
+
+
+def build_grouped_stacked_modular_ppt(
+    selected_sections: List[str],
+    placeholder_values: Optional[Dict[str, Any]] = None,
+    top_margin_px: int = 100,
+    bottom_margin_px: int = 100,
+    section_spacing_px: int = 60
+) -> Dict[str, Any]:
+
+    if not MODULAR_TEMPLATE_PATH.exists():
+        raise HTTPException(status_code=500, detail=f"Modular template not found at {MODULAR_TEMPLATE_PATH}")
+
+    registry = load_section_registry()
+    source_prs = Presentation(str(MODULAR_TEMPLATE_PATH))
+    detected_sections = detect_template_sections(source_prs)
+    sections_to_build = ordered_selected_sections(registry, selected_sections)
+
+    missing_sections = [
+        section_id for section_id in sections_to_build
+        if section_id not in detected_sections
+    ]
+
+    if missing_sections:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Some requested sections were not found in modular_sections_master.pptx",
+                "missing_sections": missing_sections,
+                "detected_sections": list(detected_sections.keys())
+            }
+        )
+
+    section_data = []
+
+    for section_id in sections_to_build:
+        source_slide = source_prs.slides[detected_sections[section_id]]
+        group_shape = find_main_group_shape(source_slide)
+
+        if group_shape is None:
+            continue
+
+        section_data.append({
+            "section_id": section_id,
+            "label": registry[section_id].get("label", section_id),
+            "slide": source_slide,
+            "shape": group_shape,
+            "width": group_shape.width,
+            "height": group_shape.height
+        })
+
+    top_margin = px_to_emu(top_margin_px)
+    bottom_margin = px_to_emu(bottom_margin_px)
+    spacing = px_to_emu(section_spacing_px)
+
+    total_height = top_margin + bottom_margin
+
+    for i, section in enumerate(section_data):
+        total_height += section["height"]
+        if i < len(section_data) - 1:
+            total_height += spacing
+
+    output_prs = create_output_presentation_with_source_theme(
+        source_template_path=MODULAR_TEMPLATE_PATH,
+        slide_height=total_height
+    )
+
+    slide_width = output_prs.slide_width
+    blank_layout = output_prs.slide_layouts[6]
+    output_slide = output_prs.slides.add_slide(blank_layout)
+
+    cursor_y = top_margin
+    built_sections = []
+
+    for section in section_data:
+        section_id = section["section_id"]
+
+        section_left = calculate_section_left(
+            section_id=section_id,
+            section_width=section["width"],
+            slide_width=slide_width
+        )
+
+        copy_group_to_slide_relationship_safe(
+            source_shape=section["shape"],
+            source_slide=section["slide"],
+            target_slide=output_slide,
+            new_left=section_left,
+            new_top=cursor_y
+        )
+
+        built_sections.append({
+            "section_id": section_id,
+            "label": section["label"],
+            "alignment": "right" if section_id == "TITLE_OVERVIEW" else "center",
+            "left_px_approx": round(section_left / EMU_PER_PX),
+            "width_px_approx": round(section["width"] / EMU_PER_PX),
+            "height_px_approx": round(section["height"] / EMU_PER_PX)
+        })
+
+        cursor_y += section["height"] + spacing
+
+    replace_placeholders_on_slide(output_slide, placeholder_values or {})
+
+    campaign_name = clean_text(placeholder_values.get("CAMPAIGN_NAME")) if placeholder_values else ""
+    safe_campaign = safe_filename(campaign_name or "Campaign")
+    date_stamp = datetime.now().strftime("%d%m%Y")
+
+    filename = f"PCA One Pager_{safe_campaign}_{date_stamp}.pptx"
+    output_path = GENERATED_FILES_DIR / filename
+
+    output_prs.save(output_path)
+
+    return {
+        "output_path": str(output_path),
+        "filename": filename,
+        "built_sections": built_sections,
+        "slide_height_px_approx": round(total_height / EMU_PER_PX)
+    }
+
+
+# ==================================================
+# SLIDE DECK FILTERING
+# ==================================================
+
+SECTION_ID_PREFIX = "SECTION_ID:"
+
+SECTION_ALIASES = {
+    "TITLE OVERVIEW": "TITLE_OVERVIEW",
+    "EXEC SUMMARY": "TITLE_OVERVIEW",
+    "EXECUTIVE SUMMARY": "TITLE_OVERVIEW",
+    "TITLE PERFORMANCE": "TITLE_PERFORMANCE",
+    "MARKET PERFORMANCE": "MARKET_PERFORMANCE",
+    "TOP TITLES MARKETS": "TOP_TITLES_MARKETS",
+    "TOP TITLES & MARKETS": "TOP_TITLES_MARKETS",
+    "CREATIVE OVERVIEW": "CREATIVE_OVERVIEW",
+    "CREATIVE PERFORMANCE": "CREATIVE_PERFORMANCE",
+    "ATTENTION SCORE": "ATTENTION_SCORE",
+    "HAPPYDEMICS": "HAPPYDEMICS",
+    "LUMEN RESULTS": "LUMEN_RESULTS",
+    "LUMEN LEARNINGS": "LUMEN_LEARNINGS",
+    "BRAND STUDY": "BRAND_STUDY",
+    "LEARNING RECOMMENDATIONS": "LEARNING_RECOMMENDATIONS",
+    "LEARNINGS": "LEARNING_RECOMMENDATIONS",
+}
+
+
+def canonical_section_id(value: Any) -> str:
+    raw = clean_text(value)
+    if not raw:
+        return ""
+
+    raw = raw.replace(SECTION_ID_PREFIX, "").strip()
+    raw = raw.replace("&", " AND ")
+
+    alias_key = re.sub(r"[^A-Za-z0-9]+", " ", raw).strip().upper()
+    if alias_key in SECTION_ALIASES:
+        return SECTION_ALIASES[alias_key]
+
+    return re.sub(r"[^A-Za-z0-9]+", "_", raw).strip("_").upper()
+
+
+def canonical_section_list(sections: List[str], include_title_overview: bool = True) -> List[str]:
+    output = []
+    seen = set()
+
+    if include_title_overview:
+        output.append("TITLE_OVERVIEW")
+        seen.add("TITLE_OVERVIEW")
+
+    for section in sections or []:
+        section_id = canonical_section_id(section)
+        if section_id and section_id not in seen:
+            output.append(section_id)
+            seen.add(section_id)
+
+    return output
+
 
 def iter_shapes_recursive(shapes):
     for shape in shapes:
         yield shape
-        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-            yield from iter_shapes_recursive(shape.shapes)
+        if hasattr(shape, "shapes"):
+            for subshape in iter_shapes_recursive(shape.shapes):
+                yield subshape
 
 
-def replace_text_preserve_runs(shape, replacements: Dict[str, str]) -> None:
-    if not hasattr(shape, "text_frame") or shape.text_frame is None:
-        return
+def get_shape_text_recursive(shape) -> str:
+    if hasattr(shape, "text") and shape.text:
+        return shape.text or ""
 
-    for paragraph in shape.text_frame.paragraphs:
-        for run in paragraph.runs:
-            text = run.text
-            if not text:
-                continue
-            new_text = text
-            for placeholder, value in replacements.items():
-                if placeholder in new_text:
-                    new_text = new_text.replace(placeholder, value)
-            if new_text != text:
-                run.text = new_text
+    if hasattr(shape, "text_frame") and shape.text_frame:
+        try:
+            return shape.text_frame.text or ""
+        except Exception:
+            pass
+
+    return ""
 
 
-def replace_text_in_presentation(prs: Presentation, replacements: Dict[str, str]) -> None:
-    for slide in prs.slides:
-        for shape in iter_shapes_recursive(slide.shapes):
-            replace_text_preserve_runs(shape, replacements)
+def is_slide_deck_section_marker_shape(shape) -> bool:
+    text = clean_text(get_shape_text_recursive(shape))
+    return bool(re.match(r"^SECTION_ID\s*:", text, flags=re.IGNORECASE))
 
 
-def save_presentation_to_bytes(prs: Presentation) -> bytes:
-    stream = io.BytesIO()
-    prs.save(stream)
-    return stream.getvalue()
+def extract_section_ids_from_slide(slide) -> List[str]:
+    section_ids = []
 
-
-# =============================================================================
-# SECTION_ID helpers for slide decks
-# =============================================================================
-
-def shape_text(shape) -> str:
-    if not hasattr(shape, "text_frame") or shape.text_frame is None:
-        return ""
-    return clean_text(shape.text_frame.text)
-
-
-def get_slide_section_ids(slide) -> List[str]:
-    ids: List[str] = []
     for shape in iter_shapes_recursive(slide.shapes):
-        text = shape_text(shape)
+        text = clean_text(get_shape_text_recursive(shape))
         if not text:
             continue
-        # Supports exact marker boxes and inline markers.
-        for match in re.finditer(r"SECTION_ID\s*:\s*([A-Za-z0-9_ -]+)", text, flags=re.IGNORECASE):
-            sid = canonical_section_id(match.group(1))
-            if sid and sid not in ids:
-                ids.append(sid)
-    return ids
 
+        matches = re.findall(
+            r"SECTION_ID\s*:\s*([A-Za-z0-9_ &-]+)",
+            text,
+            flags=re.IGNORECASE
+        )
 
-def is_section_marker_shape(shape) -> bool:
-    text = shape_text(shape)
-    return bool(re.search(r"^\s*SECTION_ID\s*:", text, flags=re.IGNORECASE))
+        for match in matches:
+            section_id = canonical_section_id(match)
+            if section_id and section_id not in section_ids:
+                section_ids.append(section_id)
+
+    return section_ids
 
 
 def remove_shape_from_slide(slide, shape) -> None:
@@ -622,332 +1523,683 @@ def remove_shape_from_slide(slide, shape) -> None:
         element = shape._element
         element.getparent().remove(element)
     except Exception:
-        # Best-effort cleanup. Never fail PPT generation because of a marker shape.
         pass
 
 
-def remove_section_id_text_boxes(prs: Presentation) -> None:
+def remove_section_id_text_boxes_from_deck(prs: Presentation) -> None:
     for slide in prs.slides:
-        shapes_to_remove = [shape for shape in iter_shapes_recursive(slide.shapes) if is_section_marker_shape(shape)]
-        for shape in shapes_to_remove:
+        marker_shapes = [
+            shape for shape in iter_shapes_recursive(slide.shapes)
+            if is_slide_deck_section_marker_shape(shape)
+        ]
+
+        for shape in marker_shapes:
             remove_shape_from_slide(slide, shape)
 
 
-def delete_slides_by_index(prs: Presentation, indexes_to_delete: Sequence[int]) -> None:
-    """Delete slides from a python-pptx Presentation.
-
-    Uses internal slide id list because python-pptx has no public delete API.
-    Delete in reverse order to keep indexes stable.
-    """
+def delete_slides_by_index(prs: Presentation, slide_indexes: List[int]) -> None:
     slide_id_list = prs.slides._sldIdLst
-    for index in sorted(indexes_to_delete, reverse=True):
+
+    for index in sorted(slide_indexes, reverse=True):
         if index < 0 or index >= len(prs.slides):
             continue
+
         slide_id = slide_id_list[index]
-        rel_id = slide_id.rId
-        prs.part.drop_rel(rel_id)
+        prs.part.drop_rel(slide_id.rId)
         slide_id_list.remove(slide_id)
 
 
-def filter_slide_deck_by_sections(prs: Presentation, keep_sections: List[str]) -> Dict[str, Any]:
+def resolve_slide_deck_sections(request: SlideDeckFromEocRequest) -> Optional[List[str]]:
+    mode = clean_text(request.deck_mode).lower() or "matching"
+
+    if mode not in ["full", "matching", "custom"]:
+        raise HTTPException(status_code=400, detail="deck_mode must be full, matching, or custom.")
+
+    if mode == "full":
+        return None
+
+    if mode == "custom":
+        if not request.custom_deck_sections:
+            raise HTTPException(
+                status_code=400,
+                detail="custom_deck_sections is required when deck_mode is custom."
+            )
+
+        return canonical_section_list(request.custom_deck_sections, include_title_overview=True)
+
+    source_sections = request.one_pager_sections or request.selected_sections
+    return canonical_section_list(source_sections, include_title_overview=True)
+
+
+def filter_slide_deck_by_sections(prs: Presentation, keep_sections: Optional[List[str]]) -> Dict[str, Any]:
+    if keep_sections is None:
+        slide_report = []
+
+        for index, slide in enumerate(prs.slides):
+            slide_report.append({
+                "slide_number": index + 1,
+                "section_ids": extract_section_ids_from_slide(slide),
+                "kept": True
+            })
+
+        return {
+            "deck_mode": "full",
+            "requested_sections": "ALL",
+            "deleted_slide_count": 0,
+            "kept_slide_count": len(prs.slides),
+            "slide_report": slide_report,
+        }
+
     keep_set = set(keep_sections)
-    indexes_to_delete: List[int] = []
-    slide_report: List[Dict[str, Any]] = []
+    slide_indexes_to_delete = []
+    slide_report = []
 
-    for idx, slide in enumerate(prs.slides):
-        slide_ids = get_slide_section_ids(slide)
+    for index, slide in enumerate(prs.slides):
+        slide_section_ids = extract_section_ids_from_slide(slide)
 
-        # Slides without SECTION_ID are treated as global/admin slides and retained.
-        keep = True if not slide_ids else bool(keep_set.intersection(slide_ids))
+        # Slides without SECTION_ID are retained as global/admin slides.
+        keep_slide = True if not slide_section_ids else bool(keep_set.intersection(slide_section_ids))
 
-        slide_report.append(
-            {
-                "slide_index": idx + 1,
-                "section_ids": slide_ids,
-                "kept": keep,
-            }
-        )
+        slide_report.append({
+            "slide_number": index + 1,
+            "section_ids": slide_section_ids,
+            "kept": keep_slide
+        })
 
-        if not keep:
-            indexes_to_delete.append(idx)
+        if not keep_slide:
+            slide_indexes_to_delete.append(index)
 
-    delete_slides_by_index(prs, indexes_to_delete)
+    delete_slides_by_index(prs, slide_indexes_to_delete)
 
     return {
+        "deck_mode": "filtered",
         "requested_sections": keep_sections,
-        "deleted_slide_count": len(indexes_to_delete),
+        "deleted_slide_count": len(slide_indexes_to_delete),
         "kept_slide_count": len(prs.slides),
         "slide_report": slide_report,
     }
 
 
-def resolve_deck_sections(
-    deck_mode: str,
-    one_pager_sections: Optional[Sequence[str]],
-    section_selections: Optional[Sequence[str]],
-    custom_deck_sections: Optional[Sequence[str]],
-) -> Optional[List[str]]:
-    mode = normalise_deck_mode(deck_mode)
-
-    if mode == "full":
-        return None
-
-    if mode == "matching":
-        source = one_pager_sections or section_selections or []
-        return canonical_section_list(source, include_base=True)
-
-    # custom
-    source = custom_deck_sections or []
-    if not source:
-        raise HTTPException(status_code=400, detail="custom_deck_sections is required when deck_mode is custom.")
-    return canonical_section_list(source, include_base=True)
+def replace_placeholders_in_presentation(prs: Presentation, placeholder_values: Dict[str, Any]) -> None:
+    for slide in prs.slides:
+        replace_placeholders_on_slide(slide, placeholder_values)
 
 
-# =============================================================================
-# One Pager assembly
-# =============================================================================
+def build_filtered_slide_deck_ppt(
+    request: SlideDeckFromEocRequest,
+    placeholder_values: Dict[str, Any],
+) -> Dict[str, Any]:
 
-def generate_one_pager_pptx(
-    parsed: ParsedEOC,
-    exec_summary: Optional[str],
-    section_selections: Optional[Sequence[str]],
-) -> Tuple[bytes, Dict[str, Any]]:
-    if not TEMPLATE_PATH.exists():
-        raise HTTPException(status_code=500, detail=f"One Pager template not found: {TEMPLATE_PATH}")
-
-    prs = Presentation(str(TEMPLATE_PATH))
-    sections = canonical_section_list(section_selections, include_base=True)
-
-    replacements = dict(parsed.mapped_values)
-    replacements["{{EXEC_SUMMARY}}"] = safe_ppt(exec_summary or build_exec_summary(parsed))
-
-    replace_text_in_presentation(prs, replacements)
-
-    # Stable workflow preservation:
-    # This endpoint intentionally does not delete or restructure one-pager content.
-    # Dynamic section stacking/copying can remain in the existing stable implementation.
-    # The new deck filtering logic is isolated to slide-deck functions below.
-
-    content = save_presentation_to_bytes(prs)
-    meta = {
-        "sections": sections,
-        "template": str(TEMPLATE_PATH),
-        "slide_count": len(prs.slides),
-    }
-    return content, meta
-
-
-# =============================================================================
-# Slide Deck generation
-# =============================================================================
-
-def generate_slide_deck_pptx(
-    parsed: ParsedEOC,
-    exec_summary: Optional[str],
-    deck_mode: str,
-    section_selections: Optional[Sequence[str]],
-    one_pager_sections: Optional[Sequence[str]],
-    custom_deck_sections: Optional[Sequence[str]],
-) -> Tuple[bytes, Dict[str, Any]]:
     if not SLIDE_DECK_TEMPLATE_PATH.exists():
-        raise HTTPException(status_code=500, detail=f"Slide Deck template not found: {SLIDE_DECK_TEMPLATE_PATH}")
-
-    mode = normalise_deck_mode(deck_mode)
-    prs = Presentation(str(SLIDE_DECK_TEMPLATE_PATH))
-
-    replacements = dict(parsed.mapped_values)
-    replacements["{{EXEC_SUMMARY}}"] = safe_ppt(exec_summary or build_exec_summary(parsed))
-
-    filter_meta: Dict[str, Any] = {
-        "deck_mode": mode,
-        "template": str(SLIDE_DECK_TEMPLATE_PATH),
-        "initial_slide_count": len(prs.slides),
-    }
-
-    deck_sections = resolve_deck_sections(
-        deck_mode=mode,
-        one_pager_sections=one_pager_sections,
-        section_selections=section_selections,
-        custom_deck_sections=custom_deck_sections,
-    )
-
-    if deck_sections is not None:
-        filter_meta.update(filter_slide_deck_by_sections(prs, deck_sections))
-    else:
-        filter_meta.update(
-            {
-                "requested_sections": "ALL",
-                "deleted_slide_count": 0,
-                "kept_slide_count": len(prs.slides),
-                "slide_report": [
-                    {
-                        "slide_index": idx + 1,
-                        "section_ids": get_slide_section_ids(slide),
-                        "kept": True,
-                    }
-                    for idx, slide in enumerate(prs.slides)
-                ],
-            }
+        raise HTTPException(
+            status_code=500,
+            detail=f"Slide deck template not found at {SLIDE_DECK_TEMPLATE_PATH}"
         )
 
-    # Remove marker text boxes after filtering so detection still works before deletion.
-    remove_section_id_text_boxes(prs)
+    prs = Presentation(str(SLIDE_DECK_TEMPLATE_PATH))
 
-    # Replace placeholders after deleting slides and marker boxes.
-    replace_text_in_presentation(prs, replacements)
+    deck_sections = resolve_slide_deck_sections(request)
+    filter_meta = filter_slide_deck_by_sections(prs, deck_sections)
+
+    # Remove helper labels after filtering, so they never appear in final output.
+    remove_section_id_text_boxes_from_deck(prs)
+
+    replace_placeholders_in_presentation(prs, placeholder_values or {})
+
+    campaign_name = clean_text(placeholder_values.get("CAMPAIGN_NAME")) if placeholder_values else ""
+    safe_campaign = safe_filename(campaign_name or "Campaign")
+    date_stamp = datetime.now().strftime("%d%m%Y")
+
+    filename = f"PCA Slides_{safe_campaign}_{date_stamp}.pptx"
+    output_path = GENERATED_FILES_DIR / filename
+
+    prs.save(output_path)
 
     filter_meta["final_slide_count"] = len(prs.slides)
-    content = save_presentation_to_bytes(prs)
-    return content, filter_meta
 
-
-# =============================================================================
-# API endpoints
-# =============================================================================
-
-@app.get("/health")
-def health() -> Dict[str, Any]:
     return {
-        "status": "ok",
-        "version": APP_VERSION,
-        "template_found": TEMPLATE_PATH.exists(),
-        "slide_deck_template_found": SLIDE_DECK_TEMPLATE_PATH.exists(),
-        "rules_master_found": RULES_MASTER_PATH.exists(),
-        "template_path": str(TEMPLATE_PATH),
-        "slide_deck_template_path": str(SLIDE_DECK_TEMPLATE_PATH),
-        "rules_master_path": str(RULES_MASTER_PATH),
-        "supported_deck_modes": ["full", "matching", "custom"],
+        "output_path": str(output_path),
+        "filename": filename,
+        "filter_meta": filter_meta,
+    }
+
+
+@app.get("/list-modular-sections")
+def list_modular_sections():
+    registry = load_section_registry()
+    sections = []
+
+    for section_id, meta in registry.items():
+        sections.append({
+            "section_id": section_id,
+            "label": meta.get("label", section_id),
+            "required": meta.get("required", False),
+            "default_order": meta.get("default_order", 999)
+        })
+
+    sections.sort(key=lambda item: item.get("default_order", 999))
+
+    return {
+        "app_version": APP_VERSION,
+        "sections": sections
     }
 
 
 @app.post("/validate-eoc")
-def validate_eoc(req: ValidateEocRequest) -> Dict[str, Any]:
-    file_bytes, filename = decode_uploaded_excel(req)
-    parsed = parse_eoc(file_bytes)
-    exec_summary = build_exec_summary(parsed)
+async def validate_eoc_endpoint(payload: FileRefsPayload):
+    try:
+        if not payload.openaiFileIdRefs:
+            raise HTTPException(status_code=400, detail="No EOC file supplied.")
 
-    return {
-        "status": "validated",
-        "version": APP_VERSION,
-        "filename": filename,
-        "display_values": parsed.display_values,
-        "mapped_values": parsed.mapped_values,
-        "top_performers": {
-            "ctr": parsed.raw_summary.get("top_ctr", []),
-            "engagement": parsed.raw_summary.get("top_engagement", []),
-            "vcr": parsed.raw_summary.get("top_vcr", []),
-        },
-        "exec_summary": exec_summary,
-        "missing_value_display": MISSING_DISPLAY_VALUE,
-        "missing_value_ppt": MISSING_PPT_VALUE,
-    }
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            eoc_path = await download_openai_file(payload.openaiFileIdRefs[0], tmp_dir)
+            sheets = read_uploaded_eoc(eoc_path)
+            result = build_mapped_values(sheets, filename=eoc_path.name)
 
+        return JSONResponse(content={
+            "status": "validated",
+            "app_version": APP_VERSION,
+            **result,
+        })
 
-@app.post("/generate-exec-summary")
-def generate_exec_summary(req: GenerateExecSummaryRequest) -> Dict[str, Any]:
-    file_bytes, filename = decode_uploaded_excel(req)
-    parsed = parse_eoc(file_bytes)
+    except HTTPException:
+        raise
 
-    pptx_bytes, meta = generate_one_pager_pptx(
-        parsed=parsed,
-        exec_summary=req.exec_summary,
-        section_selections=req.section_selections or req.one_pager_sections,
-    )
-
-    campaign = slug_filename(parsed.mapped_values.get("{{CAMPAIGN_NAME}}", "Campaign"))
-    output_name = req.output_filename or f"PCA One Pager_{campaign}_{now_stamp()}.pptx"
-
-    return {
-        "status": "generated",
-        "version": APP_VERSION,
-        "source_filename": filename,
-        "type": "one_pager",
-        "metadata": meta,
-        "file": file_response_payload(output_name, pptx_bytes),
-    }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e),
+                "trace": traceback.format_exc(),
+                "app_version": APP_VERSION,
+            },
+        )
 
 
-@app.post("/generate-modular-one-pager")
-def generate_modular_one_pager(req: GenerateExecSummaryRequest) -> Dict[str, Any]:
-    # Alias endpoint to preserve the modular GPT workflow name.
-    return generate_exec_summary(req)
+@app.post("/create-modular-one-pager-download-link")
+def create_modular_one_pager_download_link(request: ModularOnePagerRequest):
+    try:
+        result = build_grouped_stacked_modular_ppt(
+            selected_sections=request.selected_sections,
+            placeholder_values=request.placeholder_values or {},
+            top_margin_px=request.top_margin_px,
+            bottom_margin_px=request.bottom_margin_px,
+            section_spacing_px=request.section_spacing_px
+        )
+
+        download_url = f"{PUBLIC_BASE_URL}/files/{Path(result['filename']).name}"
+
+        return {
+            "success": True,
+            "app_version": APP_VERSION,
+            "filename": result["filename"],
+            "download_url": download_url,
+            "built_sections": result["built_sections"],
+            "slide_height_px_approx": result["slide_height_px_approx"],
+            "message": "Modular one-pager generated successfully."
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to create modular one-pager download link",
+                "error": str(e)
+            }
+        )
+
+
+@app.post("/create-modular-one-pager-from-eoc")
+async def create_modular_one_pager_from_eoc(request: ModularOnePagerFromEocRequest):
+    try:
+        if not request.openaiFileIdRefs:
+            raise HTTPException(status_code=400, detail="No EOC file supplied.")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            eoc_path = await download_openai_file(request.openaiFileIdRefs[0], tmp_dir)
+            sheets = read_uploaded_eoc(eoc_path)
+            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+
+        mapped_values = parsed["mapped_values"]
+        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
+
+        result = build_grouped_stacked_modular_ppt(
+            selected_sections=request.selected_sections,
+            placeholder_values=mapped_values,
+            top_margin_px=request.top_margin_px,
+            bottom_margin_px=request.bottom_margin_px,
+            section_spacing_px=request.section_spacing_px
+        )
+
+        download_url = f"{PUBLIC_BASE_URL}/files/{Path(result['filename']).name}"
+
+        return {
+            "success": True,
+            "app_version": APP_VERSION,
+            "filename": result["filename"],
+            "download_url": download_url,
+            "built_sections": result["built_sections"],
+            "slide_height_px_approx": result["slide_height_px_approx"],
+            "summary": parsed,
+            "message": "Modular one-pager generated from EOC successfully."
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to create modular one-pager from EOC",
+                "error": str(e),
+                "trace": traceback.format_exc(),
+            }
+        )
+
+
+@app.post("/create-modular-one-pager-from-eoc-file-response")
+async def create_modular_one_pager_from_eoc_file_response(request: ModularOnePagerFromEocRequest):
+    try:
+        if not request.openaiFileIdRefs:
+            raise HTTPException(status_code=400, detail="No EOC file supplied.")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            eoc_path = await download_openai_file(request.openaiFileIdRefs[0], tmp_dir)
+            sheets = read_uploaded_eoc(eoc_path)
+            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+
+        mapped_values = parsed["mapped_values"]
+        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
+
+        result = build_grouped_stacked_modular_ppt(
+            selected_sections=request.selected_sections,
+            placeholder_values=mapped_values,
+            top_margin_px=request.top_margin_px,
+            bottom_margin_px=request.bottom_margin_px,
+            section_spacing_px=request.section_spacing_px
+        )
+
+        output_path = Path(result["output_path"])
+
+        if output_path.stat().st_size > MAX_RETURN_FILE_BYTES:
+            download_url = f"{PUBLIC_BASE_URL}/files/{output_path.name}"
+            return {
+                "success": True,
+                "app_version": APP_VERSION,
+                "filename": result["filename"],
+                "download_url": download_url,
+                "built_sections": result["built_sections"],
+                "slide_height_px_approx": result["slide_height_px_approx"],
+                "summary": parsed,
+                "message": "File was too large for file-card return, so a download link was created."
+            }
+
+        encoded = base64.b64encode(output_path.read_bytes()).decode("utf-8")
+
+        return {
+            "success": True,
+            "app_version": APP_VERSION,
+            "summary": parsed,
+            "built_sections": result["built_sections"],
+            "slide_height_px_approx": result["slide_height_px_approx"],
+            "openaiFileResponse": [
+                {
+                    "name": result["filename"],
+                    "mime_type": PPTX_MIME_TYPE,
+                    "content": encoded,
+                }
+            ],
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to create modular one-pager file response",
+                "error": str(e),
+                "trace": traceback.format_exc(),
+            }
+        )
 
 
 @app.post("/generate-slide-deck")
-def generate_slide_deck(req: GenerateSlideDeckRequest) -> Dict[str, Any]:
-    file_bytes, filename = decode_uploaded_excel(req)
-    parsed = parse_eoc(file_bytes)
+async def generate_slide_deck(request: SlideDeckFromEocRequest):
+    try:
+        if not request.openaiFileIdRefs:
+            raise HTTPException(status_code=400, detail="No EOC file supplied.")
 
-    pptx_bytes, meta = generate_slide_deck_pptx(
-        parsed=parsed,
-        exec_summary=req.exec_summary,
-        deck_mode=req.deck_mode,
-        section_selections=req.section_selections,
-        one_pager_sections=req.one_pager_sections,
-        custom_deck_sections=req.custom_deck_sections,
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            eoc_path = await download_openai_file(request.openaiFileIdRefs[0], tmp_dir)
+            sheets = read_uploaded_eoc(eoc_path)
+            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+
+        mapped_values = parsed["mapped_values"]
+        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
+
+        result = build_filtered_slide_deck_ppt(
+            request=request,
+            placeholder_values=mapped_values,
+        )
+
+        download_url = f"{PUBLIC_BASE_URL}/files/{Path(result['filename']).name}"
+
+        return {
+            "success": True,
+            "app_version": APP_VERSION,
+            "filename": result["filename"],
+            "download_url": download_url,
+            "summary": parsed,
+            "filter_meta": result["filter_meta"],
+            "message": "Slide deck generated successfully."
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to generate slide deck",
+                "error": str(e),
+                "trace": traceback.format_exc(),
+            }
+        )
+
+
+@app.post("/generate-slide-deck-file-response")
+async def generate_slide_deck_file_response(request: SlideDeckFromEocRequest):
+    try:
+        if not request.openaiFileIdRefs:
+            raise HTTPException(status_code=400, detail="No EOC file supplied.")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            eoc_path = await download_openai_file(request.openaiFileIdRefs[0], tmp_dir)
+            sheets = read_uploaded_eoc(eoc_path)
+            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+
+        mapped_values = parsed["mapped_values"]
+        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
+
+        result = build_filtered_slide_deck_ppt(
+            request=request,
+            placeholder_values=mapped_values,
+        )
+
+        output_path = Path(result["output_path"])
+
+        if output_path.stat().st_size > MAX_RETURN_FILE_BYTES:
+            download_url = f"{PUBLIC_BASE_URL}/files/{output_path.name}"
+            return {
+                "success": True,
+                "app_version": APP_VERSION,
+                "filename": result["filename"],
+                "download_url": download_url,
+                "summary": parsed,
+                "filter_meta": result["filter_meta"],
+                "message": "File was too large for file-card return, so a download link was created."
+            }
+
+        encoded = base64.b64encode(output_path.read_bytes()).decode("utf-8")
+
+        return {
+            "success": True,
+            "app_version": APP_VERSION,
+            "summary": parsed,
+            "filter_meta": result["filter_meta"],
+            "openaiFileResponse": [
+                {
+                    "name": result["filename"],
+                    "mime_type": PPTX_MIME_TYPE,
+                    "content": encoded,
+                }
+            ],
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Failed to generate slide deck file response",
+                "error": str(e),
+                "trace": traceback.format_exc(),
+            }
+        )
+
+
+@app.get("/files/{filename}")
+def get_generated_file(filename: str):
+    safe_name = os.path.basename(filename)
+
+    if not safe_name.endswith(".pptx"):
+        raise HTTPException(status_code=400, detail="Only .pptx files can be downloaded.")
+
+    file_path = GENERATED_FILES_DIR / safe_name
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Generated file not found or has expired.")
+
+    return FileResponse(
+        path=str(file_path),
+        filename=safe_name,
+        media_type=PPTX_MIME_TYPE
     )
 
-    campaign = slug_filename(parsed.mapped_values.get("{{CAMPAIGN_NAME}}", "Campaign"))
-    output_name = req.output_filename or f"PCA Slides_{campaign}_{now_stamp()}.pptx"
+# ====================================================================
+# MODEL CONTEXT PROTOCOL (MCP) UNIFIED PROTOCOL INTERCEPTOR
+# ====================================================================
+# Refactored to route PowerPoint assembly directly to the lightweight 
+# link-generation endpoint, preventing stateless buffer overloads.
+# Added slide deck filtering while preserving stable EOC download handling.
 
+@app.post("/mcp")
+async def mcp_post_endpoint(request: Dict[str, Any]):
+    req_id = request.get("id", 1)
+    method = request.get("method", "")
+    params = request.get("params", {})
+
+    # 1. Handle Protocol Handshake Initialization Check
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "PCA_Automation_Generator",
+                    "version": APP_VERSION
+                }
+            }
+        }
+
+    # 2. Handle Post-Initialization Event Notification
+    elif method == "notifications/initialized":
+        return JSONResponse(content={})
+
+    # 3. Handle System Capability Discovery Requests
+    elif method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "tools": [
+                    {
+                        "name": "validate_eoc",
+                        "description": "Validate an uploaded EOC Excel file and return mapped campaign values.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "openaiFileIdRefs": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "download_link": {"type": "string"},
+                                            "name": {"type": "string"},
+                                            "mime_type": {"type": "string"}
+                                        }
+                                    }
+                                }
+                            },
+                            "required": ["openaiFileIdRefs"]
+                        }
+                    },
+                    {
+                        "name": "create_modular_one_pager",
+                        "description": "Generate a modular PowerPoint One-Pager from verified EOC metrics.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "openaiFileIdRefs": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "download_link": {"type": "string"}
+                                        }
+                                    }
+                                },
+                                "selected_sections": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "exec_summary": {"type": "string"}
+                            },
+                            "required": ["openaiFileIdRefs", "selected_sections"]
+                        }
+                    },
+                    {
+                        "name": "generate_slide_deck",
+                        "description": "Generate a filtered PCA Slide Deck from verified EOC metrics using full, matching, or custom deck mode.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "openaiFileIdRefs": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "download_link": {"type": "string"}
+                                        }
+                                    }
+                                },
+                                "selected_sections": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "one_pager_sections": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "custom_deck_sections": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "deck_mode": {"type": "string"},
+                                "exec_summary": {"type": "string"}
+                            },
+                            "required": ["openaiFileIdRefs"]
+                        }
+                    }
+                ]
+            }
+        }
+
+    # 4. Route Runtime Tool Executions straight to Core Subroutines
+    elif method == "tools/call":
+        tool_name = params.get("name", "")
+        arguments = params.get("arguments", {})
+
+        if tool_name == "validate_eoc":
+            try:
+                payload = FileRefsPayload(**arguments)
+                raw_response = await validate_eoc_endpoint(payload)
+                response_text = raw_response.body.decode("utf-8")
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [{"type": "text", "text": response_text}]
+                    }
+                }
+            except Exception as e:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32603, "message": f"Execution error: {str(e)}"}
+                }
+
+        elif tool_name == "create_modular_one_pager":
+            try:
+                request_obj = ModularOnePagerFromEocRequest(**arguments)
+                # Switched target to the lightweight link generator to resolve the connection reset
+                raw_response = await create_modular_one_pager_from_eoc(request_obj)
+                if hasattr(raw_response, "body"):
+                    response_text = raw_response.body.decode("utf-8")
+                else:
+                    response_text = json.dumps(raw_response)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [{"type": "text", "text": response_text}]
+                    }
+                }
+            except Exception as e:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32603, "message": f"Execution error: {str(e)}"}
+                }
+
+        elif tool_name == "generate_slide_deck":
+            try:
+                request_obj = SlideDeckFromEocRequest(**arguments)
+                raw_response = await generate_slide_deck(request_obj)
+                if hasattr(raw_response, "body"):
+                    response_text = raw_response.body.decode("utf-8")
+                else:
+                    response_text = json.dumps(raw_response)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [{"type": "text", "text": response_text}]
+                    }
+                }
+            except Exception as e:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32603, "message": f"Execution error: {str(e)}"}
+                }
+
+    # 5. Fallback Error Block for Unsupported Operations
     return {
-        "status": "generated",
-        "version": APP_VERSION,
-        "source_filename": filename,
-        "type": "slide_deck",
-        "deck_mode": normalise_deck_mode(req.deck_mode),
-        "metadata": meta,
-        "file": file_response_payload(output_name, pptx_bytes),
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "error": {"code": -32601, "message": f"Method not found: {method}"}
     }
-
-
-@app.post("/generate-one-pager-and-slides")
-def generate_one_pager_and_slides(req: GenerateOnePagerAndSlidesRequest) -> Dict[str, Any]:
-    file_bytes, filename = decode_uploaded_excel(req)
-    parsed = parse_eoc(file_bytes)
-
-    selected_sections = req.one_pager_sections or req.section_selections or []
-
-    one_pager_bytes, one_pager_meta = generate_one_pager_pptx(
-        parsed=parsed,
-        exec_summary=req.exec_summary,
-        section_selections=selected_sections,
-    )
-
-    slide_deck_bytes, slide_deck_meta = generate_slide_deck_pptx(
-        parsed=parsed,
-        exec_summary=req.exec_summary,
-        deck_mode=req.deck_mode,
-        section_selections=selected_sections,
-        one_pager_sections=selected_sections,
-        custom_deck_sections=req.custom_deck_sections,
-    )
-
-    campaign = slug_filename(parsed.mapped_values.get("{{CAMPAIGN_NAME}}", "Campaign"))
-    one_pager_name = req.one_pager_filename or f"PCA One Pager_{campaign}_{now_stamp()}.pptx"
-    slide_deck_name = req.slide_deck_filename or f"PCA Slides_{campaign}_{now_stamp()}.pptx"
-
-    return {
-        "status": "generated",
-        "version": APP_VERSION,
-        "source_filename": filename,
-        "types": ["one_pager", "slide_deck"],
-        "deck_mode": normalise_deck_mode(req.deck_mode),
-        "one_pager_metadata": one_pager_meta,
-        "slide_deck_metadata": slide_deck_meta,
-        "files": [
-            file_response_payload(one_pager_name, one_pager_bytes),
-            file_response_payload(slide_deck_name, slide_deck_bytes),
-        ],
-    }
-
-
-# =============================================================================
-# Local run
-# =============================================================================
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=True)
-
