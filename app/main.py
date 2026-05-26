@@ -19,10 +19,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.3-silent-file-retry"
+APP_VERSION = "12.9.4-placeholder-fallbacks"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
+EXEC_SUMMARY_MAX_CHARS = 550
 
 PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 MAX_RETURN_FILE_BYTES = 10 * 1024 * 1024
@@ -916,6 +917,108 @@ def extract_top_markets(df: pd.DataFrame, metric_key: str, max_rank: int = 5) ->
     return out
 
 
+
+def limit_exec_summary(value: Optional[str], max_chars: int = EXEC_SUMMARY_MAX_CHARS) -> str:
+    """Keep injected summaries short enough for the PPT text container."""
+    text = clean_text(value)
+    if not text:
+        return MISSING_PPT_VALUE
+    if len(text) <= max_chars:
+        return text
+    trimmed = text[:max_chars].rsplit(" ", 1)[0].strip(" ,.;:-")
+    return trimmed + "..."
+
+
+def copy_value(mapped: Dict[str, Any], source_key: str) -> str:
+    value = mapped.get(source_key)
+    if value is None or clean_text(value) == "":
+        return MISSING_PPT_VALUE
+    return str(value)
+
+
+def add_placeholder_aliases(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    """Add aliases used by combined Top Titles & Markets sections.
+
+    Some templates use a dedicated placeholder set for the combined section rather
+    than the standalone TOP_TITLES_* and TOP_MARKETS_* keys. This mirrors top
+    publisher/title values into the combined placeholder names and guarantees
+    unavailable market rows resolve to N/A instead of template defaults such as
+    Market 1 or XX%.
+    """
+    metric_map = {
+        "CTR": "CTR",
+        "ER": "ER",
+        "VCR": "VCR",
+    }
+
+    for metric in metric_map:
+        title_prefix = f"TOP_TITLES_{metric}"
+        market_prefix = f"TOP_MARKETS_{metric}"
+
+        for i in range(1, 6):
+            title_name = copy_value(mapped, f"{title_prefix}_{i}_NAME")
+            title_value = copy_value(mapped, f"{title_prefix}_{i}_VALUE")
+            market_name = copy_value(mapped, f"{market_prefix}_{i}_NAME")
+            market_value = copy_value(mapped, f"{market_prefix}_{i}_VALUE")
+
+            title_alias_prefixes = [
+                f"TOP_TITLES_MARKETS_{metric}_{i}",
+                f"TOP_TITLES_AND_MARKETS_{metric}_{i}",
+                f"TOP_TITLES_MARKETS_TITLE_{metric}_{i}",
+                f"TOP_TITLES_MARKETS_TITLES_{metric}_{i}",
+                f"TOP_TITLES_MARKETS_PERFORMER_{metric}_{i}",
+                f"TTM_TITLE_{metric}_{i}",
+                f"TTM_TITLES_{metric}_{i}",
+            ]
+
+            market_alias_prefixes = [
+                f"TOP_TITLES_MARKETS_MARKET_{metric}_{i}",
+                f"TOP_TITLES_MARKETS_MARKETS_{metric}_{i}",
+                f"TOP_TITLES_AND_MARKETS_MARKET_{metric}_{i}",
+                f"TOP_TITLES_AND_MARKETS_MARKETS_{metric}_{i}",
+                f"TTM_MARKET_{metric}_{i}",
+                f"TTM_MARKETS_{metric}_{i}",
+            ]
+
+            for alias_prefix in title_alias_prefixes:
+                mapped.setdefault(f"{alias_prefix}_NAME", title_name)
+                mapped.setdefault(f"{alias_prefix}_VALUE", title_value)
+
+            for alias_prefix in market_alias_prefixes:
+                mapped.setdefault(f"{alias_prefix}_NAME", market_name)
+                mapped.setdefault(f"{alias_prefix}_VALUE", market_value)
+
+            # Common shorter row placeholders sometimes used inside combined blocks.
+            mapped.setdefault(f"TITLE_{metric}_{i}_NAME", title_name)
+            mapped.setdefault(f"TITLE_{metric}_{i}_VALUE", title_value)
+            mapped.setdefault(f"MARKET_{metric}_{i}_NAME", market_name)
+            mapped.setdefault(f"MARKET_{metric}_{i}_VALUE", market_value)
+
+    return mapped
+
+
+def replace_template_default_literals(text: str) -> str:
+    """Replace visible template defaults that are not written as {{placeholders}}."""
+    replacements = {
+        "Title 1": MISSING_PPT_VALUE,
+        "Title 2": MISSING_PPT_VALUE,
+        "Title 3": MISSING_PPT_VALUE,
+        "Title 4": MISSING_PPT_VALUE,
+        "Title 5": MISSING_PPT_VALUE,
+        "Market 1": MISSING_PPT_VALUE,
+        "Market 2": MISSING_PPT_VALUE,
+        "Market 3": MISSING_PPT_VALUE,
+        "Market 4": MISSING_PPT_VALUE,
+        "Market 5": MISSING_PPT_VALUE,
+        "XX%": MISSING_PPT_VALUE,
+        "XX": MISSING_PPT_VALUE,
+    }
+    new_text = text
+    for old, new in replacements.items():
+        if old in new_text:
+            new_text = new_text.replace(old, new)
+    return new_text
+
 def validate_mapped_values(mapped: Dict[str, Any]) -> Dict[str, Any]:
     required_core = [
         "CAMPAIGN_NAME",
@@ -1174,6 +1277,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
             mapped.setdefault(f"{metric_prefix}_{i}_NAME", None)
             mapped.setdefault(f"{metric_prefix}_{i}_VALUE", None)
 
+    mapped = add_placeholder_aliases(mapped)
     mapped = fill_missing_for_ppt(mapped)
     display_values = build_display_values(mapped)
     validation = validate_mapped_values(mapped)
@@ -1335,9 +1439,15 @@ def replace_text_in_shape(shape, placeholder_values: Dict[str, Any]) -> None:
                 new_text = run.text
 
                 for key, value in placeholder_values.items():
+                    if str(key).startswith("__"):
+                        continue
                     placeholder = "{{" + str(key).strip("{}") + "}}"
                     replacement = MISSING_PPT_VALUE if value is None else str(value)
                     new_text = new_text.replace(placeholder, replacement)
+
+                # Final safety pass: no visible template defaults or raw placeholders.
+                new_text = re.sub(r"\{\{[^{}]+\}\}", MISSING_PPT_VALUE, new_text)
+                new_text = replace_template_default_literals(new_text)
 
                 run.text = new_text
 
@@ -1931,7 +2041,7 @@ async def create_modular_one_pager_from_eoc(request: ModularOnePagerFromEocReque
             parsed = build_mapped_values(sheets, filename=eoc_path.name)
 
         mapped_values = parsed["mapped_values"]
-        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
+        mapped_values["EXEC_SUMMARY"] = limit_exec_summary(request.exec_summary)
 
         result = build_grouped_stacked_modular_ppt(
             selected_sections=request.selected_sections,
@@ -1982,7 +2092,7 @@ async def create_modular_one_pager_from_eoc_file_response(request: ModularOnePag
             parsed = build_mapped_values(sheets, filename=eoc_path.name)
 
         mapped_values = parsed["mapped_values"]
-        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
+        mapped_values["EXEC_SUMMARY"] = limit_exec_summary(request.exec_summary)
 
         result = build_grouped_stacked_modular_ppt(
             selected_sections=request.selected_sections,
@@ -2053,7 +2163,7 @@ async def generate_slide_deck(request: SlideDeckFromEocRequest):
             parsed = build_mapped_values(sheets, filename=eoc_path.name)
 
         mapped_values = parsed["mapped_values"]
-        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
+        mapped_values["EXEC_SUMMARY"] = limit_exec_summary(request.exec_summary)
 
         result = build_filtered_slide_deck_ppt(
             request=request,
@@ -2100,7 +2210,7 @@ async def generate_slide_deck_file_response(request: SlideDeckFromEocRequest):
             parsed = build_mapped_values(sheets, filename=eoc_path.name)
 
         mapped_values = parsed["mapped_values"]
-        mapped_values["EXEC_SUMMARY"] = request.exec_summary or MISSING_PPT_VALUE
+        mapped_values["EXEC_SUMMARY"] = limit_exec_summary(request.exec_summary)
 
         result = build_filtered_slide_deck_ppt(
             request=request,
