@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.0-slide-deck-filtering"
+APP_VERSION = "12.9.1-site-table-slide-deck-filtering"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -519,16 +519,18 @@ def classify_table(df: pd.DataFrame) -> str:
         1 if find_col(df, "delivered_av_amount") else 0,
     ])
 
-    if delivery_hits >= 2:
-        return "campaign_delivery"
-
+    # Site performance tables often also contain geo/global_local columns.
+    # Prioritise Site classification when a site/publisher column appears with performance metrics.
     if site_col and (has_ctr or has_er or has_vcr):
         return "site"
 
-    if geo_col and has_impressions:
+    if delivery_hits >= 2:
+        return "campaign_delivery"
+
+    if geo_col and has_impressions and not site_col:
         return "geo"
 
-    if format_col and has_impressions:
+    if format_col and has_impressions and not site_col:
         return "format"
 
     date_col = find_col(df, "date")
@@ -581,6 +583,19 @@ def table_quality_score(df: pd.DataFrame, table_type: str) -> int:
     for key in weights.get(table_type, []):
         if find_col(df, key):
             score += 12 if table_type == "campaign_delivery" else 10
+
+    # Strongly favour true Site tables that include publisher/title plus multiple performance metrics.
+    # This prevents Site+Geo tables being selected as generic geo tables and losing top-publisher output.
+    if table_type == "site":
+        metric_hits = sum([
+            1 if find_col(df, "ctr") else 0,
+            1 if find_col(df, "engagement_rate") else 0,
+            1 if find_col(df, "vcr") else 0,
+            1 if find_col(df, "impressions") else 0,
+        ])
+        if find_col(df, "site"):
+            score += 30
+        score += metric_hits * 15
 
     if table_type == "campaign_kpi_summary":
         if find_col(df, "mobkoi_on_screen"):
@@ -1412,6 +1427,7 @@ def build_grouped_stacked_modular_ppt(
     }
 
 
+
 # ==================================================
 # SLIDE DECK FILTERING
 # ==================================================
@@ -1875,6 +1891,7 @@ async def create_modular_one_pager_from_eoc_file_response(request: ModularOnePag
         )
 
 
+
 @app.post("/generate-slide-deck")
 async def generate_slide_deck(request: SlideDeckFromEocRequest):
     try:
@@ -1902,8 +1919,8 @@ async def generate_slide_deck(request: SlideDeckFromEocRequest):
             "app_version": APP_VERSION,
             "filename": result["filename"],
             "download_url": download_url,
-            "summary": parsed,
             "filter_meta": result["filter_meta"],
+            "summary": parsed,
             "message": "Slide deck generated successfully."
         }
 
@@ -1951,8 +1968,8 @@ async def generate_slide_deck_file_response(request: SlideDeckFromEocRequest):
                 "app_version": APP_VERSION,
                 "filename": result["filename"],
                 "download_url": download_url,
-                "summary": parsed,
                 "filter_meta": result["filter_meta"],
+                "summary": parsed,
                 "message": "File was too large for file-card return, so a download link was created."
             }
 
@@ -2010,7 +2027,6 @@ def get_generated_file(filename: str):
 # ====================================================================
 # Refactored to route PowerPoint assembly directly to the lightweight 
 # link-generation endpoint, preventing stateless buffer overloads.
-# Added slide deck filtering while preserving stable EOC download handling.
 
 @app.post("/mcp")
 async def mcp_post_endpoint(request: Dict[str, Any]):
@@ -2093,7 +2109,7 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
                     },
                     {
                         "name": "generate_slide_deck",
-                        "description": "Generate a filtered PCA Slide Deck from verified EOC metrics using full, matching, or custom deck mode.",
+                        "description": "Generate a filtered PowerPoint Slide Deck from verified EOC metrics.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -2102,7 +2118,9 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
                                     "items": {
                                         "type": "object",
                                         "properties": {
-                                            "download_link": {"type": "string"}
+                                            "download_link": {"type": "string"},
+                                            "name": {"type": "string"},
+                                            "mime_type": {"type": "string"}
                                         }
                                     }
                                 },
@@ -2118,10 +2136,13 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
                                     "type": "array",
                                     "items": {"type": "string"}
                                 },
-                                "deck_mode": {"type": "string"},
+                                "deck_mode": {
+                                    "type": "string",
+                                    "enum": ["full", "matching", "custom"]
+                                },
                                 "exec_summary": {"type": "string"}
                             },
-                            "required": ["openaiFileIdRefs"]
+                            "required": ["openaiFileIdRefs", "deck_mode"]
                         }
                     }
                 ]
