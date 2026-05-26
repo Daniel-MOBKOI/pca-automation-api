@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import math
@@ -18,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.2-section-availability"
+APP_VERSION = "12.9.3-silent-file-retry"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -1195,19 +1196,45 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
 
 
 async def download_openai_file(file_ref: OpenAIFileRef, dest_dir: Path) -> Path:
-    if not file_ref.download_link:
+    """Download an OpenAI Actions file reference with quiet internal retries.
+
+    This reduces visible ChatGPT Actions errors caused by temporary file-link readiness,
+    Render cold starts, or transient signed URL fetch failures. The function only raises
+    after all server-side retries have been exhausted.
+    """
+    if not file_ref or not file_ref.download_link:
         raise HTTPException(status_code=400, detail="Missing download_link in openaiFileIdRefs.")
 
     safe_name = file_ref.name or "uploaded_eoc.xlsx"
     safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", safe_name)
     output_path = dest_dir / safe_name
 
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        response = await client.get(file_ref.download_link)
-        response.raise_for_status()
-        output_path.write_bytes(response.content)
+    last_error = None
+    retry_delays = [0, 1.5, 3.0, 5.0]
 
-    return output_path
+    async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
+        for attempt, delay in enumerate(retry_delays, start=1):
+            if delay:
+                await asyncio.sleep(delay)
+
+            try:
+                response = await client.get(file_ref.download_link)
+                response.raise_for_status()
+
+                if not response.content:
+                    raise ValueError("Downloaded file was empty.")
+
+                output_path.write_bytes(response.content)
+                return output_path
+
+            except Exception as exc:
+                last_error = exc
+                continue
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Could not download uploaded EOC file after internal retries: {last_error}"
+    )
 
 
 def read_uploaded_eoc(path: Path) -> Dict[str, pd.DataFrame]:
