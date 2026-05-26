@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.5-market-placeholder-aliases"
+APP_VERSION = "12.9.6-stable-market-fallbacks"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -936,40 +936,22 @@ def copy_value(mapped: Dict[str, Any], source_key: str) -> str:
     return str(value)
 
 
-def add_metric_placeholder_variants(
-    mapped: Dict[str, Any],
-    base_names: List[str],
-    row_number: int,
-    name_value: str,
-    metric_value: str,
-) -> None:
-    """Create broad placeholder aliases for a performer/market row.
-
-    PowerPoint templates have evolved across versions, so the same field can
-    appear as {{TOP_MARKETS_CTR_1_NAME}}, {{TOP_MARKETS_CTR_1}},
-    {{MARKET_CTR_1_VALUE}}, {{TTM_MARKET_CTR_1_PERCENT}}, etc. This helper
-    maps all common variants to the validated value and leaves existing mapped
-    values untouched.
-    """
-    name_suffixes = ["", "_NAME", "_TITLE", "_SITE", "_PUBLISHER", "_MARKET", "_LABEL"]
-    value_suffixes = ["_VALUE", "_PERCENT", "_RATE", "_METRIC", "_PCT"]
-
-    for base in base_names:
-        clean_base = str(base).strip("_")
-        for suffix in name_suffixes:
-            mapped.setdefault(f"{clean_base}_{row_number}{suffix}", name_value)
-        for suffix in value_suffixes:
-            mapped.setdefault(f"{clean_base}_{row_number}{suffix}", metric_value)
-
-
 def add_placeholder_aliases(mapped: Dict[str, Any]) -> Dict[str, Any]:
-    """Add aliases used by standalone and combined Top Titles & Markets sections.
+    """Add aliases used by combined Top Titles & Markets sections.
 
-    This mirrors title and market data into all known placeholder styles used by
-    template variants. It also ensures unavailable values become N/A instead of
-    leaving visible defaults like Title 1, Market 1 or XX%.
+    Some templates use a dedicated placeholder set for the combined section rather
+    than the standalone TOP_TITLES_* and TOP_MARKETS_* keys. This mirrors top
+    publisher/title values into the combined placeholder names and guarantees
+    unavailable market rows resolve to N/A instead of template defaults such as
+    Market 1 or XX%.
     """
-    for metric in ["CTR", "ER", "VCR"]:
+    metric_map = {
+        "CTR": "CTR",
+        "ER": "ER",
+        "VCR": "VCR",
+    }
+
+    for metric in metric_map:
         title_prefix = f"TOP_TITLES_{metric}"
         market_prefix = f"TOP_MARKETS_{metric}"
 
@@ -979,49 +961,49 @@ def add_placeholder_aliases(mapped: Dict[str, Any]) -> Dict[str, Any]:
             market_name = copy_value(mapped, f"{market_prefix}_{i}_NAME")
             market_value = copy_value(mapped, f"{market_prefix}_{i}_VALUE")
 
-            title_alias_bases = [
-                f"TOP_TITLES_{metric}",
-                f"TOP_TITLE_{metric}",
-                f"TITLE_{metric}",
-                f"TITLES_{metric}",
-                f"PERFORMER_{metric}",
-                f"PUBLISHER_{metric}",
-                f"TOP_TITLES_MARKETS_{metric}",
-                f"TOP_TITLES_AND_MARKETS_{metric}",
-                f"TOP_TITLES_MARKETS_TITLE_{metric}",
-                f"TOP_TITLES_MARKETS_TITLES_{metric}",
-                f"TOP_TITLES_MARKETS_PERFORMER_{metric}",
-                f"TOP_TITLES_AND_MARKETS_TITLE_{metric}",
-                f"TTM_TITLE_{metric}",
-                f"TTM_TITLES_{metric}",
-                f"TTM_PERFORMER_{metric}",
+            title_alias_prefixes = [
+                f"TOP_TITLES_MARKETS_{metric}_{i}",
+                f"TOP_TITLES_AND_MARKETS_{metric}_{i}",
+                f"TOP_TITLES_MARKETS_TITLE_{metric}_{i}",
+                f"TOP_TITLES_MARKETS_TITLES_{metric}_{i}",
+                f"TOP_TITLES_MARKETS_PERFORMER_{metric}_{i}",
+                f"TTM_TITLE_{metric}_{i}",
+                f"TTM_TITLES_{metric}_{i}",
             ]
 
-            market_alias_bases = [
-                f"TOP_MARKETS_{metric}",
-                f"TOP_MARKET_{metric}",
-                f"MARKET_{metric}",
-                f"MARKETS_{metric}",
-                f"TOP_TITLES_MARKETS_MARKET_{metric}",
-                f"TOP_TITLES_MARKETS_MARKETS_{metric}",
-                f"TOP_TITLES_AND_MARKETS_MARKET_{metric}",
-                f"TOP_TITLES_AND_MARKETS_MARKETS_{metric}",
-                f"TTM_MARKET_{metric}",
-                f"TTM_MARKETS_{metric}",
+            market_alias_prefixes = [
+                f"TOP_TITLES_MARKETS_MARKET_{metric}_{i}",
+                f"TOP_TITLES_MARKETS_MARKETS_{metric}_{i}",
+                f"TOP_TITLES_AND_MARKETS_MARKET_{metric}_{i}",
+                f"TOP_TITLES_AND_MARKETS_MARKETS_{metric}_{i}",
+                f"TTM_MARKET_{metric}_{i}",
+                f"TTM_MARKETS_{metric}_{i}",
             ]
 
-            add_metric_placeholder_variants(mapped, title_alias_bases, i, title_name, title_value)
-            add_metric_placeholder_variants(mapped, market_alias_bases, i, market_name, market_value)
+            for alias_prefix in title_alias_prefixes:
+                mapped.setdefault(f"{alias_prefix}_NAME", title_name)
+                mapped.setdefault(f"{alias_prefix}_VALUE", title_value)
 
-            # Extra row-first styles sometimes used by manually built templates.
-            mapped.setdefault(f"TITLE_{i}_{metric}", title_name)
-            mapped.setdefault(f"TITLE_{i}_{metric}_VALUE", title_value)
-            mapped.setdefault(f"MARKET_{i}_{metric}", market_name)
-            mapped.setdefault(f"MARKET_{i}_{metric}_VALUE", market_value)
-            mapped.setdefault(f"TTM_TITLE_{i}_{metric}", title_name)
-            mapped.setdefault(f"TTM_TITLE_{i}_{metric}_VALUE", title_value)
-            mapped.setdefault(f"TTM_MARKET_{i}_{metric}", market_name)
-            mapped.setdefault(f"TTM_MARKET_{i}_{metric}_VALUE", market_value)
+            for alias_prefix in market_alias_prefixes:
+                mapped.setdefault(f"{alias_prefix}_NAME", market_name)
+                mapped.setdefault(f"{alias_prefix}_VALUE", market_value)
+
+            # Common shorter row placeholders sometimes used inside combined blocks.
+            mapped.setdefault(f"TITLE_{metric}_{i}_NAME", title_name)
+            mapped.setdefault(f"TITLE_{metric}_{i}_VALUE", title_value)
+            mapped.setdefault(f"MARKET_{metric}_{i}_NAME", market_name)
+            mapped.setdefault(f"MARKET_{metric}_{i}_VALUE", market_value)
+
+            # Conservative extra aliases for templates that use metric-first naming.
+            # Kept deliberately small to avoid large Action responses.
+            mapped.setdefault(f"{metric}_TITLE_{i}_NAME", title_name)
+            mapped.setdefault(f"{metric}_TITLE_{i}_VALUE", title_value)
+            mapped.setdefault(f"{metric}_MARKET_{i}_NAME", market_name)
+            mapped.setdefault(f"{metric}_MARKET_{i}_VALUE", market_value)
+            mapped.setdefault(f"TOP_{metric}_TITLE_{i}_NAME", title_name)
+            mapped.setdefault(f"TOP_{metric}_TITLE_{i}_VALUE", title_value)
+            mapped.setdefault(f"TOP_{metric}_MARKET_{i}_NAME", market_name)
+            mapped.setdefault(f"TOP_{metric}_MARKET_{i}_VALUE", market_value)
 
     return mapped
 
@@ -1314,7 +1296,6 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
 
     diagnostics = {
         "detected_tables": list(detected.keys()),
-        "table_columns": {k: [str(c) for c in v.columns] for k, v in detected.items()},
         "rules_master_loaded": rules is not None,
         "version": APP_VERSION,
     }
