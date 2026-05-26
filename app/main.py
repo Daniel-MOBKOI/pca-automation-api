@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.12-stable-rollback-exec-summary-restored"
+APP_VERSION = "12.9.13-exec-summary-fallback"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -36,16 +36,43 @@ app = FastAPI(title="PCA Automation Generator", version=APP_VERSION)
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
 
-MODULAR_TEMPLATE_PATH = Path(
-    os.getenv("MODULAR_TEMPLATE_PATH", BASE_DIR / "templates" / "modular_sections_master.pptx")
+
+def resolve_existing_path(env_key: str, candidates: List[Path]) -> Path:
+    env_value = os.getenv(env_key)
+    if env_value:
+        return Path(env_value)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    # Return the first candidate so health output still makes the expected path clear.
+    return candidates[0]
+
+
+MODULAR_TEMPLATE_PATH = resolve_existing_path(
+    "MODULAR_TEMPLATE_PATH",
+    [
+        BASE_DIR / "templates" / "modular_sections_master.pptx",
+        ROOT_DIR / "templates" / "modular_sections_master.pptx",
+    ],
 )
 
-SLIDE_DECK_TEMPLATE_PATH = Path(
-    os.getenv("SLIDE_DECK_TEMPLATE_PATH", BASE_DIR / "templates" / "slide_deck_master.pptx")
+SLIDE_DECK_TEMPLATE_PATH = resolve_existing_path(
+    "SLIDE_DECK_TEMPLATE_PATH",
+    [
+        BASE_DIR / "templates" / "slide_deck_master.pptx",
+        ROOT_DIR / "templates" / "slide_deck_master.pptx",
+    ],
 )
 
-SECTION_REGISTRY_PATH = Path(
-    os.getenv("SECTION_REGISTRY_PATH", BASE_DIR / "section_registry" / "section_registry.json")
+SECTION_REGISTRY_PATH = resolve_existing_path(
+    "SECTION_REGISTRY_PATH",
+    [
+        BASE_DIR / "section_registry" / "section_registry.json",
+        ROOT_DIR / "app" / "section_registry" / "section_registry.json",
+        ROOT_DIR / "section_registry" / "section_registry.json",
+    ],
 )
 
 RULES_MASTER_PATH = Path(
@@ -927,6 +954,78 @@ def limit_exec_summary(value: Optional[str], max_chars: int = EXEC_SUMMARY_MAX_C
         return text
     trimmed = text[:max_chars].rsplit(" ", 1)[0].strip(" ,.;:-")
     return trimmed + "..."
+
+
+def value_available(value: Any) -> bool:
+    text = clean_text(value)
+    return bool(text and text not in {MISSING_PPT_VALUE, MISSING_DISPLAY_VALUE, "Not available", "N/A"})
+
+
+def build_default_exec_summary(mapped: Dict[str, Any]) -> str:
+    """Create a safe default summary when GPT has not supplied/selected one.
+
+    Validation creates a default summary in chat, but the One Pager/Slide Deck
+    action does not always receive it as request.exec_summary. This fallback
+    prevents {{EXEC_SUMMARY}} or lorem ipsum from remaining in the PPT.
+    """
+    campaign = clean_text(mapped.get("CAMPAIGN_NAME")) or "The campaign"
+    markets = clean_text(mapped.get("CAMPAIGN_MARKETS"))
+    impressions = clean_text(mapped.get("DELIVERED_IMPRESSIONS"))
+    ctr = clean_text(mapped.get("PERFORMANCE_CTR"))
+    er = clean_text(mapped.get("PERFORMANCE_ENGAGEMENT_RATE"))
+    vcr = clean_text(mapped.get("PERFORMANCE_VCR"))
+    on_screen = clean_text(mapped.get("PERFORMANCE_ON_SCREEN"))
+
+    parts = []
+
+    opening = campaign
+    if value_available(markets):
+        opening += f" delivered across {markets}"
+    if value_available(impressions):
+        opening += f", generating {impressions} impressions"
+    opening += "."
+    parts.append(opening)
+
+    metrics = []
+    if value_available(ctr):
+        metrics.append(f"CTR of {ctr}")
+    if value_available(er):
+        metrics.append(f"engagement rate of {er}")
+    if value_available(vcr):
+        metrics.append(f"VCR of {vcr}")
+    if value_available(on_screen):
+        metrics.append(f"on-screen rate of {on_screen}")
+
+    if metrics:
+        if len(metrics) == 1:
+            metric_sentence = f"The campaign achieved a {metrics[0]}."
+        else:
+            metric_sentence = "The campaign achieved " + ", ".join(metrics[:-1]) + f" and {metrics[-1]}."
+        parts.append(metric_sentence)
+
+    top_ctr = clean_text(mapped.get("TOP_TITLES_CTR_1_NAME"))
+    top_er = clean_text(mapped.get("TOP_TITLES_ER_1_NAME"))
+    top_vcr = clean_text(mapped.get("TOP_TITLES_VCR_1_NAME"))
+
+    leaders = []
+    if value_available(top_ctr):
+        leaders.append(f"{top_ctr} led CTR")
+    if value_available(top_er) and top_er != top_ctr:
+        leaders.append(f"{top_er} led engagement")
+    if value_available(top_vcr) and top_vcr not in {top_ctr, top_er}:
+        leaders.append(f"{top_vcr} led video completion")
+
+    if leaders:
+        parts.append(" ".join(leaders) + ".")
+
+    return limit_exec_summary(" ".join(parts))
+
+
+def resolve_exec_summary_for_ppt(request_summary: Optional[str], mapped: Dict[str, Any]) -> str:
+    supplied = clean_text(request_summary)
+    if supplied:
+        return limit_exec_summary(supplied)
+    return build_default_exec_summary(mapped)
 
 
 def copy_value(mapped: Dict[str, Any], source_key: str) -> str:
@@ -2125,7 +2224,7 @@ async def create_modular_one_pager_from_eoc(request: ModularOnePagerFromEocReque
             parsed = build_mapped_values(sheets, filename=eoc_path.name)
 
         mapped_values = parsed["mapped_values"]
-        mapped_values["EXEC_SUMMARY"] = limit_exec_summary(request.exec_summary)
+        mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(request.exec_summary, mapped_values)
 
         result = build_grouped_stacked_modular_ppt(
             selected_sections=request.selected_sections,
@@ -2176,7 +2275,7 @@ async def create_modular_one_pager_from_eoc_file_response(request: ModularOnePag
             parsed = build_mapped_values(sheets, filename=eoc_path.name)
 
         mapped_values = parsed["mapped_values"]
-        mapped_values["EXEC_SUMMARY"] = limit_exec_summary(request.exec_summary)
+        mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(request.exec_summary, mapped_values)
 
         result = build_grouped_stacked_modular_ppt(
             selected_sections=request.selected_sections,
@@ -2247,7 +2346,7 @@ async def generate_slide_deck(request: SlideDeckFromEocRequest):
             parsed = build_mapped_values(sheets, filename=eoc_path.name)
 
         mapped_values = parsed["mapped_values"]
-        mapped_values["EXEC_SUMMARY"] = limit_exec_summary(request.exec_summary)
+        mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(request.exec_summary, mapped_values)
 
         result = build_filtered_slide_deck_ppt(
             request=request,
@@ -2294,7 +2393,7 @@ async def generate_slide_deck_file_response(request: SlideDeckFromEocRequest):
             parsed = build_mapped_values(sheets, filename=eoc_path.name)
 
         mapped_values = parsed["mapped_values"]
-        mapped_values["EXEC_SUMMARY"] = limit_exec_summary(request.exec_summary)
+        mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(request.exec_summary, mapped_values)
 
         result = build_filtered_slide_deck_ppt(
             request=request,
