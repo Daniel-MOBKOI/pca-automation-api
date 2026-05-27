@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.15-api-validation-gpt-summary"
+APP_VERSION = "13.1.0-display-rules"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -1048,6 +1048,45 @@ def chat_top_rows(mapped: Dict[str, Any], prefix: str, max_rows: int = 3) -> Lis
     return rows or ["• Not available"]
 
 
+def valid_top_row_count(mapped: Dict[str, Any], prefix: str, max_rows: int = 5) -> int:
+    count = 0
+    for i in range(1, max_rows + 1):
+        if value_available(mapped.get(f"{prefix}_{i}_NAME")) and value_available(mapped.get(f"{prefix}_{i}_VALUE")):
+            count += 1
+    return count
+
+
+def has_minimum_market_data(mapped: Dict[str, Any], min_rows: int = 3) -> bool:
+    return any([
+        valid_top_row_count(mapped, "TOP_MARKETS_CTR", 5) >= min_rows,
+        valid_top_row_count(mapped, "TOP_MARKETS_ER", 5) >= min_rows,
+        valid_top_row_count(mapped, "TOP_MARKETS_VCR", 5) >= min_rows,
+    ])
+
+
+def render_modular_section_options(section_availability: Dict[str, Any]) -> str:
+    labels_by_number = {item.get("number"): item.get("label") for item in section_availability.get("selection_labels", [])}
+    section_names = {
+        1: labels_by_number.get(1, "Title Performance"),
+        2: labels_by_number.get(2, "Market Performance"),
+        3: labels_by_number.get(3, "Top Titles & Markets"),
+        4: labels_by_number.get(4, "Creative Overview"),
+        5: labels_by_number.get(5, "Creative Performance"),
+        6: "Attention Score",
+        7: "Happydemics",
+        8: "Lumen Results",
+        9: "Brand Study",
+        10: "Learning Recommendations",
+    }
+    lines = [
+        "Available Modular Sections",
+        "",
+    ]
+    for number in range(1, 11):
+        lines.append(f"{number}. {section_names[number]}")
+    return "\n".join(lines)
+
+
 def build_summary_inputs(mapped: Dict[str, Any]) -> Dict[str, Any]:
     """Return a compact, GPT-friendly set of values for writing the Exec Summary.
 
@@ -1087,6 +1126,10 @@ def build_summary_inputs(mapped: Dict[str, Any]) -> Dict[str, Any]:
         "top_ctr": top("TOP_TITLES_CTR", 3),
         "top_engagement_rate": top("TOP_TITLES_ER", 3),
         "top_vcr": top("TOP_TITLES_VCR", 3),
+        "top_market_ctr": top("TOP_MARKETS_CTR", 3),
+        "top_market_engagement_rate": top("TOP_MARKETS_ER", 3),
+        "top_market_vcr": top("TOP_MARKETS_VCR", 3),
+        "market_data_available": has_minimum_market_data(mapped, 3),
     }
 
 
@@ -1127,17 +1170,32 @@ def render_validation_text(mapped: Dict[str, Any]) -> str:
         "",
         "**Top Performing Titles**",
         "",
-        "CTR Leaders",
+        "Top CTR",
         *chat_top_rows(mapped, "TOP_TITLES_CTR", 3),
         "",
-        "Engagement Rate Leaders",
+        "Top ER",
         *chat_top_rows(mapped, "TOP_TITLES_ER", 3),
         "",
-        "VCR Leaders",
+        "Top VCR",
         *chat_top_rows(mapped, "TOP_TITLES_VCR", 3),
     ]
-    return "\n".join(lines)
 
+    if has_minimum_market_data(mapped, 3):
+        lines.extend([
+            "",
+            "**Top Performing Markets**",
+            "",
+            "Top CTR",
+            *chat_top_rows(mapped, "TOP_MARKETS_CTR", 3),
+            "",
+            "Top ER",
+            *chat_top_rows(mapped, "TOP_MARKETS_ER", 3),
+            "",
+            "Top VCR",
+            *chat_top_rows(mapped, "TOP_MARKETS_VCR", 3),
+        ])
+
+    return "\n".join(lines)
 
 def copy_value(mapped: Dict[str, Any], source_key: str) -> str:
     value = mapped.get(source_key)
@@ -1506,6 +1564,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
     validation = validate_mapped_values(mapped)
     section_availability = build_section_availability(mapped, detected)
     display_validation_text = render_validation_text(mapped)
+    display_section_options = render_modular_section_options(section_availability)
     summary_inputs = build_summary_inputs(mapped)
 
     diagnostics = {
@@ -1522,6 +1581,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         "summary_inputs": summary_inputs,
         "validation": validation,
         "section_availability": section_availability,
+        "display_section_options": display_section_options,
         "diagnostics": diagnostics,
     }
 
@@ -1546,6 +1606,7 @@ def compact_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]:
         "summary_inputs": parsed.get("summary_inputs", {}),
         "validation": parsed.get("validation", {}),
         "section_availability": parsed.get("section_availability", {}),
+        "display_section_options": parsed.get("display_section_options", ""),
         "diagnostics": compact_diagnostics,
     }
 
