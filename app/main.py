@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.13-exec-summary-fallback"
+APP_VERSION = "12.9.14-api-rendered-validation"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -1028,6 +1028,90 @@ def resolve_exec_summary_for_ppt(request_summary: Optional[str], mapped: Dict[st
     return build_default_exec_summary(mapped)
 
 
+
+
+def chat_display_value(value: Any) -> str:
+    """Return a clean chat-facing value while keeping PPT N/A logic separate."""
+    text = clean_text(value)
+    if not text or text in {MISSING_PPT_VALUE, MISSING_DISPLAY_VALUE, "nan", "None"}:
+        return "Not available"
+    return text.replace("—", "-")
+
+
+def chat_top_rows(mapped: Dict[str, Any], prefix: str, max_rows: int = 3) -> List[str]:
+    rows = []
+    for i in range(1, max_rows + 1):
+        name = mapped.get(f"{prefix}_{i}_NAME")
+        value = mapped.get(f"{prefix}_{i}_VALUE")
+        if value_available(name) and value_available(value):
+            rows.append(f"• {chat_display_value(name)} - {chat_display_value(value)}")
+    return rows or ["• Not available"]
+
+
+def render_validation_text(mapped: Dict[str, Any], exec_summary: Optional[str] = None) -> str:
+    """Render the full validation response in the API so GPT only has to display it.
+
+    This keeps formatting, labels, dash style and missing-value wording stable
+    without relying on long GPT instructions.
+    """
+    summary = limit_exec_summary(exec_summary or build_default_exec_summary(mapped))
+    if not value_available(summary):
+        summary = "Not available"
+
+    lines = [
+        "**Campaign Overview**",
+        "",
+        f"• **Campaign Name:** {chat_display_value(mapped.get('CAMPAIGN_NAME'))}",
+        f"• **Client:** {chat_display_value(mapped.get('CLIENT_NAME') or mapped.get('CLIENT'))}",
+        f"• **Markets:** {chat_display_value(mapped.get('CAMPAIGN_MARKETS'))}",
+        f"• **Live Dates:** {chat_display_value(mapped.get('LIVE_DATES_FULL'))}",
+        f"• **Campaign Period:** {chat_display_value(mapped.get('CAMPAIGN_PERIOD'))}",
+        "",
+        "**Delivery & Spend**",
+        "",
+        f"• **Delivered Impressions:** {chat_display_value(mapped.get('DELIVERED_IMPRESSIONS'))}",
+        f"• **IO Overall Impressions:** {chat_display_value(mapped.get('IO_OVERALL_IMPRESSIONS'))}",
+        f"• **Added Value Impressions:** {chat_display_value(mapped.get('ADDED_VALUE_IMPRESSIONS'))}",
+        f"• **Delivery (incl. AV):** {chat_display_value(mapped.get('DELIVERY_WITH_AV_PERCENT'))}",
+        f"• **Added Value Worth:** {chat_display_value(mapped.get('ADDED_VALUE_WORTH'))}",
+        f"• **Budget:** {chat_display_value(mapped.get('CAMPAIGN_BUDGET'))}",
+        "",
+        "**Performance Metrics**",
+        "",
+        f"• **CTR:** {chat_display_value(mapped.get('PERFORMANCE_CTR'))}",
+        f"• **Engagement Rate:** {chat_display_value(mapped.get('PERFORMANCE_ENGAGEMENT_RATE'))}",
+        f"• **VCR:** {chat_display_value(mapped.get('PERFORMANCE_VCR'))}",
+        f"• **On-Screen Rate:** {chat_display_value(mapped.get('PERFORMANCE_ON_SCREEN'))}",
+        "",
+        "**Creative Formats**",
+        "",
+        f"• {chat_display_value(mapped.get('CAMPAIGN_FORMATS'))}",
+        "",
+        "**Top Performing Titles**",
+        "",
+        "CTR Leaders",
+        *chat_top_rows(mapped, "TOP_TITLES_CTR", 3),
+        "",
+        "Engagement Rate Leaders",
+        *chat_top_rows(mapped, "TOP_TITLES_ER", 3),
+        "",
+        "VCR Leaders",
+        *chat_top_rows(mapped, "TOP_TITLES_VCR", 3),
+        "",
+        "",
+        "**Exec Summary**",
+        "",
+        summary.replace("—", "-"),
+        "",
+        "**Next Steps**",
+        "",
+        "1. Continue to PCA One Pager Design",
+        "2. Generate Other Exec Summary Options",
+        "3. Upload Another EOC",
+    ]
+    return "\n".join(lines)
+
+
 def copy_value(mapped: Dict[str, Any], source_key: str) -> str:
     value = mapped.get(source_key)
     if value is None or clean_text(value) == "":
@@ -1389,9 +1473,12 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
 
     mapped = add_placeholder_aliases(mapped)
     mapped = fill_missing_for_ppt(mapped)
+    default_exec_summary = build_default_exec_summary(mapped)
+    mapped["EXEC_SUMMARY"] = default_exec_summary
     display_values = build_display_values(mapped)
     validation = validate_mapped_values(mapped)
     section_availability = build_section_availability(mapped, detected)
+    display_validation_text = render_validation_text(mapped, default_exec_summary)
 
     diagnostics = {
         "detected_tables": list(detected.keys()),
@@ -1402,6 +1489,8 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
     return {
         "mapped_values": mapped,
         "display_values": display_values,
+        "display_validation_text": display_validation_text,
+        "default_exec_summary": default_exec_summary,
         "validation": validation,
         "section_availability": section_availability,
         "diagnostics": diagnostics,
