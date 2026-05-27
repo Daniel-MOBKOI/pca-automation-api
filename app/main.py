@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.14-api-rendered-validation"
+APP_VERSION = "12.9.14-lite-api-rendered-validation"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -1497,6 +1497,29 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
     }
 
 
+def compact_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a compact validation payload for ChatGPT Actions.
+
+    The full mapped/display dictionaries are useful internally for PPT generation,
+    but returning them through Actions can create oversized responses and unstable
+    upload retries. GPT only needs the rendered validation text, default summary,
+    validation flags, and section availability.
+    """
+    diagnostics = parsed.get("diagnostics") or {}
+    compact_diagnostics = {
+        "detected_tables": diagnostics.get("detected_tables", []),
+        "version": diagnostics.get("version", APP_VERSION),
+    }
+
+    return {
+        "display_validation_text": parsed.get("display_validation_text", ""),
+        "default_exec_summary": parsed.get("default_exec_summary", ""),
+        "validation": parsed.get("validation", {}),
+        "section_availability": parsed.get("section_availability", {}),
+        "diagnostics": compact_diagnostics,
+    }
+
+
 async def download_openai_file(file_ref: OpenAIFileRef, dest_dir: Path) -> Path:
     """Download an OpenAI Actions file reference with quiet internal retries.
 
@@ -2246,7 +2269,7 @@ async def validate_eoc_endpoint(payload: FileRefsPayload):
         return JSONResponse(content={
             "status": "validated",
             "app_version": APP_VERSION,
-            **result,
+            **compact_parsed_result(result),
         })
 
     except HTTPException:
@@ -2332,7 +2355,7 @@ async def create_modular_one_pager_from_eoc(request: ModularOnePagerFromEocReque
             "download_url": download_url,
             "built_sections": result["built_sections"],
             "slide_height_px_approx": result["slide_height_px_approx"],
-            "summary": parsed,
+            "summary": compact_parsed_result(parsed),
             "message": "Modular one-pager generated from EOC successfully."
         }
 
@@ -2385,7 +2408,7 @@ async def create_modular_one_pager_from_eoc_file_response(request: ModularOnePag
                 "download_url": download_url,
                 "built_sections": result["built_sections"],
                 "slide_height_px_approx": result["slide_height_px_approx"],
-                "summary": parsed,
+                "summary": compact_parsed_result(parsed),
                 "message": "File was too large for file-card return, so a download link was created."
             }
 
@@ -2394,7 +2417,7 @@ async def create_modular_one_pager_from_eoc_file_response(request: ModularOnePag
         return {
             "success": True,
             "app_version": APP_VERSION,
-            "summary": parsed,
+            "summary": compact_parsed_result(parsed),
             "built_sections": result["built_sections"],
             "slide_height_px_approx": result["slide_height_px_approx"],
             "openaiFileResponse": [
@@ -2450,7 +2473,7 @@ async def generate_slide_deck(request: SlideDeckFromEocRequest):
             "filename": result["filename"],
             "download_url": download_url,
             "filter_meta": result["filter_meta"],
-            "summary": parsed,
+            "summary": compact_parsed_result(parsed),
             "message": "Slide deck generated successfully."
         }
 
@@ -2499,7 +2522,7 @@ async def generate_slide_deck_file_response(request: SlideDeckFromEocRequest):
                 "filename": result["filename"],
                 "download_url": download_url,
                 "filter_meta": result["filter_meta"],
-                "summary": parsed,
+                "summary": compact_parsed_result(parsed),
                 "message": "File was too large for file-card return, so a download link was created."
             }
 
@@ -2508,7 +2531,7 @@ async def generate_slide_deck_file_response(request: SlideDeckFromEocRequest):
         return {
             "success": True,
             "app_version": APP_VERSION,
-            "summary": parsed,
+            "summary": compact_parsed_result(parsed),
             "filter_meta": result["filter_meta"],
             "openaiFileResponse": [
                 {
