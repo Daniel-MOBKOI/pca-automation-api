@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "13.1.0-display-rules"
+APP_VERSION = "13.1.1-ux-polish"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -1170,13 +1170,13 @@ def render_validation_text(mapped: Dict[str, Any]) -> str:
         "",
         "**Top Performing Titles**",
         "",
-        "Top CTR",
+        "CTR",
         *chat_top_rows(mapped, "TOP_TITLES_CTR", 3),
         "",
-        "Top ER",
+        "ER",
         *chat_top_rows(mapped, "TOP_TITLES_ER", 3),
         "",
-        "Top VCR",
+        "VCR",
         *chat_top_rows(mapped, "TOP_TITLES_VCR", 3),
     ]
 
@@ -1185,13 +1185,13 @@ def render_validation_text(mapped: Dict[str, Any]) -> str:
             "",
             "**Top Performing Markets**",
             "",
-            "Top CTR",
+            "CTR",
             *chat_top_rows(mapped, "TOP_MARKETS_CTR", 3),
             "",
-            "Top ER",
+            "ER",
             *chat_top_rows(mapped, "TOP_MARKETS_ER", 3),
             "",
-            "Top VCR",
+            "VCR",
             *chat_top_rows(mapped, "TOP_MARKETS_VCR", 3),
         ])
 
@@ -1374,7 +1374,9 @@ def build_section_availability(
         has_ppt_value(mapped, "TOP_MARKETS_VCR_1_NAME"),
     ])
 
-    has_market_data = has_market_rankings or has_ppt_value(mapped, "CAMPAIGN_MARKETS")
+    # Market-based modules require 3+ valid market rows. A single campaign market
+    # such as "FR" is useful context, but not enough for market performance sections.
+    has_market_data = has_minimum_market_data(mapped, 3)
 
     format_df = detected.get("format")
     has_creative_data = has_ppt_value(mapped, "CAMPAIGN_FORMATS") or format_df is not None
@@ -1401,8 +1403,8 @@ def build_section_availability(
         },
         "TOP_TITLES_MARKETS": {
             "label": "Top Titles & Markets",
-            "available": has_site_rankings or has_market_data,
-            "note": "Market Data Missing" if has_site_rankings and not has_market_data else ("No Data Available" if not has_site_rankings and not has_market_data else ""),
+            "available": has_site_rankings and has_market_data,
+            "note": "" if (has_site_rankings and has_market_data) else "No Data Available",
         },
         "CREATIVE_OVERVIEW": {
             "label": "Creative Overview",
