@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
-APP_VERSION = "12.9.14-lite-api-rendered-validation"
+APP_VERSION = "12.9.15-api-validation-gpt-summary"
 
 MISSING_PPT_VALUE = "N/A"
 MISSING_DISPLAY_VALUE = "N/A (not specified in source file)"
@@ -1048,16 +1048,54 @@ def chat_top_rows(mapped: Dict[str, Any], prefix: str, max_rows: int = 3) -> Lis
     return rows or ["• Not available"]
 
 
-def render_validation_text(mapped: Dict[str, Any], exec_summary: Optional[str] = None) -> str:
-    """Render the full validation response in the API so GPT only has to display it.
+def build_summary_inputs(mapped: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a compact, GPT-friendly set of values for writing the Exec Summary.
 
-    This keeps formatting, labels, dash style and missing-value wording stable
-    without relying on long GPT instructions.
+    The API owns validation rendering, but GPT should own the copywriting.
+    This compact payload gives GPT enough validated facts to write a polished
+    summary without returning the full mapped/display dictionaries.
     """
-    summary = limit_exec_summary(exec_summary or build_default_exec_summary(mapped))
-    if not value_available(summary):
-        summary = "Not available"
+    def top(prefix: str, max_rows: int = 3) -> List[Dict[str, str]]:
+        rows = []
+        for i in range(1, max_rows + 1):
+            name = mapped.get(f"{prefix}_{i}_NAME")
+            value = mapped.get(f"{prefix}_{i}_VALUE")
+            if value_available(name) and value_available(value):
+                rows.append({
+                    "name": chat_display_value(name),
+                    "value": chat_display_value(value),
+                })
+        return rows
 
+    return {
+        "campaign_name": chat_display_value(mapped.get("CAMPAIGN_NAME")),
+        "client": chat_display_value(mapped.get("CLIENT_NAME") or mapped.get("CLIENT")),
+        "markets": chat_display_value(mapped.get("CAMPAIGN_MARKETS")),
+        "live_dates": chat_display_value(mapped.get("LIVE_DATES_FULL")),
+        "campaign_period": chat_display_value(mapped.get("CAMPAIGN_PERIOD")),
+        "delivered_impressions": chat_display_value(mapped.get("DELIVERED_IMPRESSIONS")),
+        "io_overall_impressions": chat_display_value(mapped.get("IO_OVERALL_IMPRESSIONS")),
+        "added_value_impressions": chat_display_value(mapped.get("ADDED_VALUE_IMPRESSIONS")),
+        "delivery_incl_av": chat_display_value(mapped.get("DELIVERY_WITH_AV_PERCENT")),
+        "added_value_worth": chat_display_value(mapped.get("ADDED_VALUE_WORTH")),
+        "budget": chat_display_value(mapped.get("CAMPAIGN_BUDGET")),
+        "ctr": chat_display_value(mapped.get("PERFORMANCE_CTR")),
+        "engagement_rate": chat_display_value(mapped.get("PERFORMANCE_ENGAGEMENT_RATE")),
+        "vcr": chat_display_value(mapped.get("PERFORMANCE_VCR")),
+        "on_screen_rate": chat_display_value(mapped.get("PERFORMANCE_ON_SCREEN")),
+        "creative_formats": chat_display_value(mapped.get("CAMPAIGN_FORMATS")),
+        "top_ctr": top("TOP_TITLES_CTR", 3),
+        "top_engagement_rate": top("TOP_TITLES_ER", 3),
+        "top_vcr": top("TOP_TITLES_VCR", 3),
+    }
+
+
+def render_validation_text(mapped: Dict[str, Any]) -> str:
+    """Render validation sections only.
+
+    Exec Summary is intentionally excluded so GPT can write it with a better
+    client-ready tone, then store/pass it as the active exec_summary for PPTs.
+    """
     lines = [
         "**Campaign Overview**",
         "",
@@ -1097,17 +1135,6 @@ def render_validation_text(mapped: Dict[str, Any], exec_summary: Optional[str] =
         "",
         "VCR Leaders",
         *chat_top_rows(mapped, "TOP_TITLES_VCR", 3),
-        "",
-        "",
-        "**Exec Summary**",
-        "",
-        summary.replace("—", "-"),
-        "",
-        "**Next Steps**",
-        "",
-        "1. Continue to PCA One Pager Design",
-        "2. Generate Other Exec Summary Options",
-        "3. Upload Another EOC",
     ]
     return "\n".join(lines)
 
@@ -1478,7 +1505,8 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
     display_values = build_display_values(mapped)
     validation = validate_mapped_values(mapped)
     section_availability = build_section_availability(mapped, detected)
-    display_validation_text = render_validation_text(mapped, default_exec_summary)
+    display_validation_text = render_validation_text(mapped)
+    summary_inputs = build_summary_inputs(mapped)
 
     diagnostics = {
         "detected_tables": list(detected.keys()),
@@ -1491,6 +1519,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         "display_values": display_values,
         "display_validation_text": display_validation_text,
         "default_exec_summary": default_exec_summary,
+        "summary_inputs": summary_inputs,
         "validation": validation,
         "section_availability": section_availability,
         "diagnostics": diagnostics,
@@ -1514,6 +1543,7 @@ def compact_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "display_validation_text": parsed.get("display_validation_text", ""),
         "default_exec_summary": parsed.get("default_exec_summary", ""),
+        "summary_inputs": parsed.get("summary_inputs", {}),
         "validation": parsed.get("validation", {}),
         "section_availability": parsed.get("section_availability", {}),
         "diagnostics": compact_diagnostics,
