@@ -54,10 +54,17 @@
     <div id="delivery-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
   </div>
 
-  <div class="mb-6" id="top-performers-section">
+  <div class="mb-5" id="top-performers-section">
     <h3 class="section-title">Top Performing Titles</h3>
     <div class="top-wrap">
       <div id="top-performers" class="top-grid"></div>
+    </div>
+  </div>
+
+  <div class="mb-6" id="top-markets-section">
+    <h3 class="section-title">Top Performing Markets</h3>
+    <div class="top-wrap">
+      <div id="top-markets" class="top-grid"></div>
     </div>
   </div>
 
@@ -90,14 +97,13 @@
   <h2 class="text-xl font-semibold">A Few Choices to Make</h2>
   <p class="text-sm text-gray-500 mt-1 mb-6">Defaults are sensible — skip what you don't need.</p>
 
-  <!-- Output type: order is One-pager / Full Deck / Both. Default One-pager. -->
   <div class="mb-8">
     <div class="text-sm font-medium mb-3">What Should I Build?</div>
     <div class="grid grid-cols-3 gap-3">
       <label class="output-chip selected" data-output="one_pager">
         <input type="radio" name="output_type" value="one_pager" class="hidden" checked />
         <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        <div class="text-sm mt-2 font-medium">One-pager</div>
+        <div class="text-sm mt-2 font-medium">One Pager</div>
       </label>
       <label class="output-chip" data-output="slide_deck">
         <input type="radio" name="output_type" value="slide_deck" class="hidden" />
@@ -112,10 +118,10 @@
     </div>
   </div>
 
-  <!-- One-pager sections -->
+  <!-- Primary section picker. Label updates dynamically based on output type. -->
   <div class="mb-8">
     <div class="flex items-center justify-between mb-3">
-      <div class="text-sm font-medium" id="onepager-sections-label">Which Sections to Include</div>
+      <div class="text-sm font-medium" id="onepager-sections-label">One Pager Sections</div>
       <div class="flex gap-2 text-xs">
         <button class="text-blue-600 hover:underline" onclick="selectAllSections()">Select All</button>
         <span class="text-gray-300">|</span>
@@ -125,7 +131,7 @@
     <div id="sections-grid" class="grid grid-cols-2 gap-2"></div>
   </div>
 
-  <!-- Exec summary with regenerate button -->
+  <!-- Exec summary with regenerate -->
   <div class="mb-6">
     <div class="flex items-center justify-between mb-2">
       <div class="text-sm font-medium">Executive Summary</div>
@@ -145,14 +151,14 @@
     </div>
   </div>
 
-  <!-- Advanced options: only visible when output includes a deck -->
+  <!-- Advanced options: ONLY visible when output type is 'both' -->
   <details id="advanced-options" class="bg-gray-50 rounded-lg p-4 hidden">
     <summary class="cursor-pointer text-sm font-medium text-gray-700">Advanced Options</summary>
     <div class="mt-4 space-y-3">
       <div>
         <label class="text-xs text-gray-600">Deck mode</label>
         <select id="deck-mode" class="block w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm">
-          <option value="matching" selected>Matching (uses same sections as One-pager)</option>
+          <option value="matching" selected>Matching (uses same sections as One Pager)</option>
           <option value="full">Full (all available slides)</option>
           <option value="custom">Custom (pick deck sections separately)</option>
         </select>
@@ -160,7 +166,7 @@
     </div>
   </details>
 
-  <!-- Custom deck section picker: only visible when deck mode is custom -->
+  <!-- Custom deck picker: ONLY visible when output='both' AND deck mode='custom' -->
   <div id="custom-deck-section" class="mb-8 hidden mt-4">
     <div class="flex items-center justify-between mb-3">
       <div class="text-sm font-medium">Custom Slide Deck Sections</div>
@@ -220,18 +226,13 @@ const state = {
   selectedDeckSections: new Set(),
   deckMode: 'matching',
   execSummary: '',
-  // Exec summary variant cycling state:
-  //   variantIndex cycles 0..N-1 as the user clicks Regenerate.
-  //   Once all variants have been shown, the cycle restarts with light variations.
   execVariantIndex: 0,
   execVariantCount: 3,
   execUserEdited: false,
 };
 
-// Default: only Title Performance selected (was: all sections)
 const DEFAULT_SELECTED_SECTIONS = new Set(['TITLE_PERFORMANCE']);
 
-// ----- Step navigation -----
 function goToStep(n) {
   state.step = n;
   for (let i = 1; i <= 5; i++) {
@@ -292,7 +293,6 @@ async function handleFile(file) {
       throw new Error(err.detail || 'Validation failed');
     }
     state.validation = await res.json();
-    // Generate the first exec summary variant from validated data
     state.execVariantIndex = 0;
     state.execUserEdited = false;
     state.execSummary = buildExecSummary(state.validation, 0);
@@ -305,18 +305,6 @@ async function handleFile(file) {
 }
 
 // ----- Exec summary generation -----
-//
-// Three variant styles modelled on the ChatGPT-quality summaries the user
-// shared. Each takes the validated EOC fields and weaves them into a
-// natural-sounding paragraph in a slightly different voice:
-//
-//   0 — Performance-led: leads with outcomes and metrics
-//   1 — Brand-led:       leads with brand/audience context, weaves in numbers
-//   2 — Concise:         tighter, single-paragraph, fewer adjectives
-//
-// Clicking Regenerate cycles 0 → 1 → 2 → 0 → 1 → 2 → ... If the user has
-// edited the textarea, Regenerate replaces their edit (consistent with
-// the user's earlier note that the textbox is fully editable).
 
 function buildExecSummary(validation, variantIndex) {
   const i = validation && validation.summary_inputs ? validation.summary_inputs : {};
@@ -333,19 +321,11 @@ function buildExecSummary(validation, variantIndex) {
   const topEr     = (i.top_engagement_rate && i.top_engagement_rate[0]) ? i.top_engagement_rate[0].name : '';
   const topVcr    = (i.top_vcr && i.top_vcr[0]) ? i.top_vcr[0].name : '';
 
-  // Helper: format impressions naturally (1,175,313 → "over 1.17M")
   const impsNice = formatImpressions(imps);
-
-  // Helper: market phrasing
-  const marketPhrase = markets
-    ? `across ${markets}`
-    : 'across the booked market';
-
-  // Pick a closing publisher highlight, preferring engagement → CTR → VCR
+  const marketPhrase = markets ? `across ${markets}` : 'across the booked market';
   const winner = topEr || topCtr || topVcr || '';
 
   if (variant === 0) {
-    // Performance-led
     return (
       `${campaign} delivered strong audience engagement ${marketPhrase}, ` +
       `generating ${impsNice} and exceeding booked delivery. ` +
@@ -359,7 +339,6 @@ function buildExecSummary(validation, variantIndex) {
   }
 
   if (variant === 1) {
-    // Brand-led
     return (
       `${campaign} delivered strong upper-funnel performance ${marketPhrase}, ` +
       `generating ${impsNice} through premium publishing environments. ` +
@@ -372,7 +351,6 @@ function buildExecSummary(validation, variantIndex) {
     );
   }
 
-  // Concise
   return (
     `${campaign} ran ${marketPhrase} and delivered ${impsNice}, ` +
     `with ${pct(ctr, 'CTR')}${joinMetrics([
@@ -384,7 +362,6 @@ function buildExecSummary(validation, variantIndex) {
   );
 }
 
-// "1,175,313" → "over 1.17M"; "397,053" → "397,053"; falls back to raw on failure
 function formatImpressions(s) {
   if (!s) return '';
   const n = parseInt(String(s).replace(/[^\d]/g, ''), 10);
@@ -393,13 +370,11 @@ function formatImpressions(s) {
   return `${n.toLocaleString()} impressions`;
 }
 
-// "0.78%" + "CTR" → "a 0.78% CTR"; empty input → "" (so we can skip cleanly)
 function pct(value, label) {
   if (!value) return '';
   return `a ${value} ${label}`;
 }
 
-// Join non-empty metric phrases with commas + final "and"
 function joinMetrics(arr) {
   const list = arr.filter(Boolean);
   if (!list.length) return '';
@@ -478,6 +453,7 @@ function renderReview() {
   ], displayInputs);
 
   renderTopPerformers(inputs);
+  renderTopMarkets(inputs);
 
   const warnEl = document.getElementById('review-warnings');
   const populated = Object.keys(inputs).length;
@@ -512,13 +488,11 @@ function renderTiles(containerId, fields, inputs) {
   });
 }
 
-function renderTopPerformers(inputs) {
-  const groups = [
-    { key: 'top_ctr',             title: 'CTR' },
-    { key: 'top_engagement_rate', title: 'Engagement Rate' },
-    { key: 'top_vcr',             title: 'VCR' },
-  ];
-  const container = document.getElementById('top-performers');
+// Generic 3-column "top X" renderer — used for both titles and markets.
+// Looks up keys like top_ctr / top_engagement_rate / top_vcr OR
+// top_ctr_market / top_engagement_rate_market / top_vcr_market.
+function renderTopGroups(containerId, sectionId, groups, inputs) {
+  const container = document.getElementById(containerId);
   container.innerHTML = '';
   let anyShown = false;
 
@@ -539,7 +513,52 @@ function renderTopPerformers(inputs) {
     }
   });
 
-  document.getElementById('top-performers-section').classList.toggle('hidden', !anyShown);
+  document.getElementById(sectionId).classList.toggle('hidden', !anyShown);
+}
+
+function renderTopPerformers(inputs) {
+  renderTopGroups('top-performers', 'top-performers-section', [
+    { key: 'top_ctr',             title: 'CTR' },
+    { key: 'top_engagement_rate', title: 'Engagement Rate' },
+    { key: 'top_vcr',             title: 'VCR' },
+  ], inputs);
+}
+
+function renderTopMarkets(inputs) {
+  // Backends vary on the key naming for top markets. Try a few common variants;
+  // first match wins. If the EOC has only one market, the section stays hidden.
+  const candidates = [
+    [
+      { key: 'top_ctr_markets',             title: 'CTR' },
+      { key: 'top_engagement_rate_markets', title: 'Engagement Rate' },
+      { key: 'top_vcr_markets',             title: 'VCR' },
+    ],
+    [
+      { key: 'top_ctr_market',             title: 'CTR' },
+      { key: 'top_engagement_rate_market', title: 'Engagement Rate' },
+      { key: 'top_vcr_market',             title: 'VCR' },
+    ],
+    [
+      { key: 'top_markets_ctr',             title: 'CTR' },
+      { key: 'top_markets_engagement_rate', title: 'Engagement Rate' },
+      { key: 'top_markets_vcr',             title: 'VCR' },
+    ],
+    [
+      { key: 'market_top_ctr',             title: 'CTR' },
+      { key: 'market_top_engagement_rate', title: 'Engagement Rate' },
+      { key: 'market_top_vcr',             title: 'VCR' },
+    ],
+  ];
+
+  for (const groups of candidates) {
+    const hasAny = groups.some(g => Array.isArray(inputs[g.key]) && inputs[g.key].length);
+    if (hasAny) {
+      renderTopGroups('top-markets', 'top-markets-section', groups, inputs);
+      return;
+    }
+  }
+  // No market data — hide the whole section
+  document.getElementById('top-markets-section').classList.add('hidden');
 }
 
 function renderFormattedReport(markdown, inputs) {
@@ -591,7 +610,8 @@ function renderFormattedReport(markdown, inputs) {
   const html = sections.map(s => {
     const titleLower = s.title.trim().toLowerCase();
 
-    if (titleLower === 'top performing titles') {
+    // 3-column grid for any "Top Performing ..." section (titles OR markets)
+    if (titleLower.startsWith('top performing')) {
       return renderTopPerformersInReport(s);
     }
 
@@ -682,7 +702,6 @@ async function loadSections() {
   const data = await res.json();
   state.sections = data.sections || [];
 
-  // Default selection: only Title Performance (plus any required sections)
   state.selectedSections = new Set();
   state.sections.forEach(s => {
     if (s.required || DEFAULT_SELECTED_SECTIONS.has(s.section_id)) {
@@ -693,13 +712,11 @@ async function loadSections() {
   renderOnePagerSections();
   renderDeckSections();
 
-  // Pre-fill exec summary
   const ta = document.getElementById('exec-summary-input');
   ta.value = state.execSummary;
   document.getElementById('summary-count').textContent = ta.value.length;
   updateVariantHint();
 
-  // Initialise the conditional UI (advanced options, custom deck picker)
   updateConditionalUI();
 }
 
@@ -730,14 +747,12 @@ function renderOnePagerSections() {
         el.classList.add('selected');
         cb.checked = true;
       }
-      // If deck mode is custom, keep deck pre-fill in sync until user touches it
       e.preventDefault();
     });
   });
 }
 
 function renderDeckSections() {
-  // Pre-fill deck sections with current one-pager selection
   state.selectedDeckSections = new Set(state.selectedSections);
 
   const grid = document.getElementById('deck-sections-grid');
@@ -812,7 +827,6 @@ function selectNoDeckSections() {
   });
 }
 
-// Output type selection (One-pager / Full Deck / Both)
 document.querySelectorAll('[data-output]').forEach(el => {
   el.addEventListener('click', () => {
     document.querySelectorAll('[data-output]').forEach(x => x.classList.remove('selected'));
@@ -824,7 +838,6 @@ document.querySelectorAll('[data-output]').forEach(el => {
   });
 });
 
-// Exec summary edits
 document.getElementById('exec-summary-input').addEventListener('input', e => {
   state.execSummary = e.target.value;
   state.execUserEdited = true;
@@ -832,25 +845,36 @@ document.getElementById('exec-summary-input').addEventListener('input', e => {
   updateVariantHint();
 });
 
-// Deck mode change
 document.getElementById('deck-mode').addEventListener('change', e => {
   state.deckMode = e.target.value;
   updateConditionalUI();
 });
 
-// Show/hide advanced options + custom deck section picker based on choices
+// Conditional UI logic:
+//   - 'one_pager'  → label = "One Pager Sections",     no advanced options
+//   - 'slide_deck' → label = "Slide Deck Sections",    no advanced options
+//   - 'both'       → label = "One Pager Sections",     advanced options visible
+//                    when deck mode = custom, second picker appears below
 function updateConditionalUI() {
-  const showAdvanced = state.outputType === 'slide_deck' || state.outputType === 'both';
-  document.getElementById('advanced-options').classList.toggle('hidden', !showAdvanced);
+  const label = document.getElementById('onepager-sections-label');
+  const advanced = document.getElementById('advanced-options');
+  const customDeck = document.getElementById('custom-deck-section');
 
-  // Custom deck picker only shows when advanced is visible AND deck mode = custom
+  if (state.outputType === 'slide_deck') {
+    label.textContent = 'Slide Deck Sections';
+  } else if (state.outputType === 'both') {
+    label.textContent = 'One Pager Sections';
+  } else {
+    label.textContent = 'One Pager Sections';
+  }
+
+  // Advanced options only when 'both' is selected
+  const showAdvanced = state.outputType === 'both';
+  advanced.classList.toggle('hidden', !showAdvanced);
+
   const showCustomDeck = showAdvanced && state.deckMode === 'custom';
-  document.getElementById('custom-deck-section').classList.toggle('hidden', !showCustomDeck);
-
-  // When opening custom deck for the first time, sync the pre-fill from one-pager
+  customDeck.classList.toggle('hidden', !showCustomDeck);
   if (showCustomDeck) {
-    // Refresh from current one-pager selection each time the picker becomes visible,
-    // so users always see "matches what you picked above" as a sensible starting point.
     renderDeckSections();
   }
 }
@@ -862,7 +886,7 @@ async function startGeneration() {
   const steps = [
     'Reading EOC Data',
     'Validating Campaign Data',
-    state.outputType === 'slide_deck' ? null : 'Populating One-pager',
+    state.outputType === 'slide_deck' ? null : 'Populating One Pager',
     state.outputType === 'one_pager' ? null : 'Building Slide Deck',
     'Final Polish',
   ].filter(Boolean);
@@ -879,12 +903,21 @@ async function startGeneration() {
   }
   setTimeout(() => markStep(steps.length - 1, 'active'), (steps.length - 1) * 400);
 
+  // For slide_deck output, the "primary" picker IS the deck section list,
+  // so we send it as both selected_sections and custom_deck_sections to
+  // keep the backend happy regardless of which it reads from.
+  const isDeckOnly = state.outputType === 'slide_deck';
+  const primarySections = [...state.selectedSections];
+  const finalDeckSections = isDeckOnly
+    ? primarySections
+    : [...state.selectedDeckSections];
+
   const fd = new FormData();
   fd.append('eoc_file', state.file);
   fd.append('output_type', state.outputType);
-  fd.append('selected_sections', JSON.stringify([...state.selectedSections]));
-  fd.append('deck_mode', state.deckMode);
-  fd.append('custom_deck_sections', JSON.stringify([...state.selectedDeckSections]));
+  fd.append('selected_sections', JSON.stringify(primarySections));
+  fd.append('deck_mode', isDeckOnly ? 'custom' : state.deckMode);
+  fd.append('custom_deck_sections', JSON.stringify(finalDeckSections));
   fd.append('exec_summary', state.execSummary || '');
 
   try {
@@ -923,7 +956,7 @@ function showDone(data) {
           <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
         </div>
         <div>
-          <div class="font-medium">One-pager</div>
+          <div class="font-medium">One Pager</div>
           <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
         </div>
       </a>`);
