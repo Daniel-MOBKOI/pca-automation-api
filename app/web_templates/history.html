@@ -18,7 +18,7 @@
   <div class="w-12 h-12 mx-auto bg-gray-100 rounded-full flex items-center justify-center mb-4">
     <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
   </div>
-  <p class="text-gray-700 font-medium">No PCAs yet</p>
+  <p class="text-gray-700 font-medium">No PCAs Yet</p>
   <p class="text-sm text-gray-500 mt-1"><a href="/app" class="text-blue-600 hover:underline">Build your first one</a> to see it here.</p>
 </div>
 {% else %}
@@ -27,7 +27,7 @@
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr class="text-left text-gray-600">
         <th class="px-5 py-3 font-medium">When</th>
-        <th class="px-5 py-3 font-medium">EOC file</th>
+        <th class="px-5 py-3 font-medium">EOC File</th>
         <th class="px-5 py-3 font-medium">Type</th>
         <th class="px-5 py-3 font-medium">Status</th>
         <th class="px-5 py-3 font-medium text-right">Downloads</th>
@@ -35,10 +35,11 @@
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for run in runs %}
+      {% set type_display = {'one_pager': 'One-pager', 'slide_deck': 'Slide Deck', 'both': 'One-pager + Slide Deck'}.get(run.output_type, run.output_type) %}
       <tr class="hover:bg-gray-50 transition-colors">
         <td class="px-5 py-3 text-gray-600 whitespace-nowrap">{{ run.created_at[:16].replace('T', ' ') }}</td>
         <td class="px-5 py-3 font-medium truncate max-w-xs">{{ run.eoc_filename or '—' }}</td>
-        <td class="px-5 py-3 text-gray-600">{{ run.output_type.replace('_', ' ') }}</td>
+        <td class="px-5 py-3 text-gray-600">{{ type_display }}</td>
         <td class="px-5 py-3">
           {% if run.status == 'completed' %}
             <span class="inline-flex items-center gap-1 text-green-700 bg-green-100 text-xs px-2 py-1 rounded-full font-medium">
@@ -51,8 +52,20 @@
         </td>
         <td class="px-5 py-3 text-right">
           {% if run.one_pager_filename or run.deck_filename %}
-            {% if run.one_pager_filename %}<a href="/files/{{ run.one_pager_filename }}" class="text-blue-600 hover:underline mr-3 font-medium">One-pager</a>{% endif %}
-            {% if run.deck_filename %}<a href="/files/{{ run.deck_filename }}" class="text-blue-600 hover:underline font-medium">Deck</a>{% endif %}
+            <div class="flex gap-2 justify-end">
+              {% if run.one_pager_filename %}
+              <a href="/files/{{ run.one_pager_filename }}" class="btn-sm">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                One-pager
+              </a>
+              {% endif %}
+              {% if run.deck_filename %}
+              <a href="/files/{{ run.deck_filename }}" class="btn-sm">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                Slide Deck
+              </a>
+              {% endif %}
+            </div>
           {% elif run.status == 'completed' %}
             <span class="text-xs text-gray-400">Expired</span>
           {% endif %}
