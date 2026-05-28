@@ -10,7 +10,6 @@
 <link rel="icon" href="/static/mobkoi-logo.webp" type="image/webp">
 <style>
   :root {
-    --brand-bg: #0a0a0a;
     --accent: #2563eb;
     --accent-hover: #1d4ed8;
     --surface: #ffffff;
@@ -22,75 +21,135 @@
     --text-tertiary: #94a3b8;
   }
   body { font-family: 'Inter', system-ui, sans-serif; color: var(--text-primary); }
+
+  /* Buttons */
   .btn-primary {
     background: var(--accent); color: white; padding: 10px 18px;
     border-radius: 8px; font-weight: 500; transition: background .15s, transform .05s;
-    display: inline-flex; align-items: center; gap: 6px;
+    display: inline-flex; align-items: center; gap: 6px; font-size: 14px;
   }
   .btn-primary:hover { background: var(--accent-hover); }
   .btn-primary:active { transform: translateY(1px); }
   .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
   .btn-ghost {
     padding: 10px 18px; border-radius: 8px; font-weight: 500; color: #374151;
-    display: inline-flex; align-items: center; gap: 6px; transition: background .15s;
+    display: inline-flex; align-items: center; gap: 6px; font-size: 14px;
+    transition: background .15s;
   }
   .btn-ghost:hover { background: #f3f4f6; }
-  .card {
-    background: var(--surface); border-radius: 14px;
-    border: 1px solid var(--border);
-  }
+
+  /* Cards */
+  .card { background: var(--surface); border-radius: 14px; border: 1px solid var(--border); }
   .card-elev {
     background: var(--surface); border-radius: 14px;
     border: 1px solid var(--border);
     box-shadow: 0 1px 2px rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.03);
   }
+
   /* Stepper */
-  .step-dot { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; flex-shrink: 0; }
+  .step-dot { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 500; flex-shrink: 0; }
   .step-dot.done { background: #10b981; color: white; }
   .step-dot.active { background: var(--accent); color: white; }
   .step-dot.pending { background: #e5e7eb; color: #6b7280; }
+
   /* Dropzone */
   .drop-zone { border: 2px dashed var(--border-strong); transition: all .15s; background: var(--surface-muted); }
   .drop-zone.dragover { border-color: var(--accent); background: #eff6ff; }
-  /* Section chips */
+
+  /* Section chips (customise screen) */
   .section-chip { border: 1.5px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer; transition: all .15s; background: white; }
   .section-chip:hover { border-color: var(--border-strong); }
   .section-chip.selected { border-color: var(--accent); background: #eff6ff; }
   .section-chip.required { background: #f9fafb; cursor: not-allowed; }
-  /* Tiles for metrics */
-  .metric-tile { background: var(--surface-muted); border-radius: 10px; padding: 14px 16px; }
-  .metric-tile .label { font-size: 12px; color: var(--text-secondary); font-weight: 500; letter-spacing: 0.01em; text-transform: uppercase; }
-  .metric-tile .value { font-size: 20px; font-weight: 600; margin-top: 6px; color: var(--text-primary); letter-spacing: -0.01em; }
-  /* Section header (within a card) */
-  .section-header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
-  .section-header .icon-bubble { width: 28px; height: 28px; border-radius: 8px; background: var(--surface-muted); display: inline-flex; align-items: center; justify-content: center; }
-  .section-header h3 { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0; }
-  /* Top performer cards */
-  .top-card { background: var(--surface-muted); border-radius: 12px; padding: 16px; }
-  .top-card h4 { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin: 0 0 12px; letter-spacing: 0.05em; text-transform: uppercase; }
-  .top-card ol { margin: 0; padding: 0; list-style: none; }
-  .top-card ol li { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; font-size: 14px; }
-  .top-card ol li:not(:last-child) { border-bottom: 1px solid var(--border); }
-  .top-card ol li .name { color: var(--text-primary); font-weight: 500; }
-  .top-card ol li .val { color: var(--text-secondary); font-variant-numeric: tabular-nums; font-weight: 500; }
+
+  /* ----- Review screen typography hierarchy -----
+     Per user preference:
+       Section header  = Title Case, smaller than data value, grey
+       Tile label      = UPPERCASE, smallest, lighter grey
+       Tile value      = Sentence case (or as-is), largest, black, semibold
+  */
+  .section-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text-secondary);
+    margin: 0 0 10px;
+  }
+  .metric-tile {
+    background: var(--surface-muted);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .metric-tile .label {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .metric-tile .value {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.005em;
+    line-height: 1.3;
+    /* Allow wrapping if data really is too long, but try to keep on one line */
+    overflow-wrap: break-word;
+  }
+
+  /* Top performers: 3 columns, no bullets, ordered list rendered as plain rows */
+  .top-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .top-col h5 {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    margin: 0 0 8px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .top-col .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 4px 0;
+    font-size: 13px;
+  }
+  .top-col .row .name { color: var(--text-primary); font-weight: 500; }
+  .top-col .row .val { color: var(--text-secondary); font-variant-numeric: tabular-nums; font-weight: 500; padding-left: 8px; }
+
   /* Disclosure */
   .disclosure { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  .disclosure summary { padding: 14px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--text-primary); user-select: none; list-style: none; transition: background .15s; }
+  .disclosure summary { padding: 12px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--text-primary); user-select: none; list-style: none; transition: background .15s; }
   .disclosure summary::-webkit-details-marker { display: none; }
   .disclosure summary:hover { background: var(--surface-muted); }
   .disclosure summary .chev { transition: transform .2s; color: var(--text-secondary); }
   .disclosure[open] summary .chev { transform: rotate(90deg); }
   .disclosure[open] summary { border-bottom: 1px solid var(--border); background: var(--surface-muted); }
   .disclosure .body { padding: 18px 20px; background: white; }
-  /* Validation report formatting */
-  .vr h4 { font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 0 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); letter-spacing: 0.02em; text-transform: uppercase; }
+
+  /* Validation report */
+  .vr h4 {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0 0 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
   .vr-section { margin-bottom: 1.25rem; }
   .vr-section:last-child { margin-bottom: 0; }
-  .vr-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; gap: 16px; }
+  .vr-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 13px; gap: 16px; }
   .vr-row .k { color: var(--text-secondary); }
   .vr-row .v { color: var(--text-primary); font-weight: 500; text-align: right; }
-  .vr-list { margin: 0; padding-left: 18px; font-size: 14px; color: var(--text-primary); }
-  .vr-list li { padding: 3px 0; }
+  .vr-inline { font-size: 13px; color: var(--text-primary); padding: 4px 0; }
+  /* 3-column top performers inside the validation report */
+  .vr-top-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .vr-top-col h5 { font-size: 10px; font-weight: 600; color: var(--text-tertiary); margin: 0 0 6px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .vr-top-col .vr-top-row { font-size: 13px; color: var(--text-primary); padding: 3px 0; }
+
   /* Animations */
   @keyframes spin { to { transform: rotate(360deg); } }
   .spinner { animation: spin 1s linear infinite; }
@@ -100,10 +159,10 @@
 
 <nav class="bg-white border-b border-gray-200">
   <div class="max-w-5xl mx-auto px-6 py-3 flex items-center justify-between">
-    <a href="/app" class="flex items-center gap-3">
-      <img src="/static/mobkoi-logo.webp" alt="Mobkoi" class="h-7 w-auto" />
-      <span class="text-gray-300 text-xl font-light">|</span>
-      <span class="font-semibold text-gray-900">PCA Generator</span>
+    <a href="/app" class="flex items-center gap-2.5">
+      <img src="/static/mobkoi-logo.webp" alt="Mobkoi" style="height: 18px; width: auto;" />
+      <span class="text-gray-300 font-light">|</span>
+      <span class="font-semibold text-gray-900 text-sm">PCA Generator</span>
     </a>
     {% if user %}
     <div class="flex items-center gap-5">
