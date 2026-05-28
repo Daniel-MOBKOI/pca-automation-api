@@ -5,3 +5,8 @@ openpyxl
 python-pptx
 httpx
 pydantic
+python-multipart
+jinja2
+itsdangerous
+authlib
+starlette
