@@ -5,7 +5,7 @@
 <div class="flex items-center justify-between mb-6">
   <div>
     <h1 class="text-2xl font-semibold">Your PCAs</h1>
-    <p class="text-sm text-gray-500 mt-1">Re-download any PCA you've generated. Files are kept for 30 days.</p>
+    <p class="text-sm text-gray-500 mt-1">Re-download any PCA you've generated. Files are kept for {{ retention_days }} days, then automatically deleted to save space.</p>
   </div>
   <a href="/app" class="btn-primary">New PCA</a>
 </div>
@@ -41,8 +41,12 @@
           {% endif %}
         </td>
         <td class="px-4 py-3 text-right">
-          {% if run.one_pager_filename %}<a href="/files/{{ run.one_pager_filename }}" class="text-blue-600 hover:underline mr-3">One-pager</a>{% endif %}
-          {% if run.deck_filename %}<a href="/files/{{ run.deck_filename }}" class="text-blue-600 hover:underline">Deck</a>{% endif %}
+          {% if run.one_pager_filename or run.deck_filename %}
+            {% if run.one_pager_filename %}<a href="/files/{{ run.one_pager_filename }}" class="text-blue-600 hover:underline mr-3">One-pager</a>{% endif %}
+            {% if run.deck_filename %}<a href="/files/{{ run.deck_filename }}" class="text-blue-600 hover:underline">Deck</a>{% endif %}
+          {% elif run.status == 'completed' %}
+            <span class="text-xs text-gray-400">Expired</span>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
