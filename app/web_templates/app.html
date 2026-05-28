@@ -15,7 +15,7 @@
 </div>
 
 <!-- STEP 1: Upload -->
-<section id="step-1" class="card p-10">
+<section id="step-1" class="card-elev p-10">
   <div class="text-center">
     <h2 class="text-2xl font-semibold text-gray-900">Let's build your PCA</h2>
     <p class="mt-2 text-gray-600">Drop your end-of-campaign Excel file below and I'll handle the rest.</p>
@@ -30,67 +30,112 @@
 </section>
 
 <!-- STEP 2: Review -->
-<section id="step-2" class="card p-8 hidden">
-  <div class="flex items-center gap-3 mb-2">
+<section id="step-2" class="card-elev p-8 hidden">
+  <!-- Header -->
+  <div class="flex items-center gap-3 mb-1">
     <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
       <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
     </div>
     <h2 class="text-xl font-semibold">Got it — here's what I found</h2>
   </div>
-  <p id="review-filename" class="text-sm text-gray-500 mb-6"></p>
+  <p id="review-filename" class="text-sm text-gray-500 ml-11 mb-6"></p>
 
-  <!-- Headline tiles -->
-  <div id="review-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"></div>
+  <!-- Validation status -->
+  <div id="review-warnings" class="mb-6"></div>
 
-  <!-- Performance metrics -->
+  <!-- Campaign Overview -->
   <div class="mb-6">
-    <div class="text-sm font-medium text-gray-700 mb-3">Performance summary</div>
-    <div id="review-metrics" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+    <div class="section-header">
+      <span class="icon-bubble">
+        <svg class="w-4 h-4 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+      </span>
+      <h3>Campaign overview</h3>
+    </div>
+    <div id="campaign-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
   </div>
 
-  <!-- Warnings / OK status -->
-  <div id="review-warnings" class="space-y-2 mb-6"></div>
+  <!-- Performance Metrics -->
+  <div class="mb-6">
+    <div class="section-header">
+      <span class="icon-bubble">
+        <svg class="w-4 h-4 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      </span>
+      <h3>Performance metrics</h3>
+    </div>
+    <div id="performance-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+  </div>
 
-  <!-- Full validation preview -->
-  <details class="mt-4">
-    <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-900">See full validation report</summary>
-    <pre id="review-raw" class="mt-3 p-4 bg-gray-50 rounded text-xs overflow-x-auto whitespace-pre-wrap"></pre>
+  <!-- Delivery & Spend -->
+  <div class="mb-6">
+    <div class="section-header">
+      <span class="icon-bubble">
+        <svg class="w-4 h-4 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </span>
+      <h3>Delivery &amp; spend</h3>
+    </div>
+    <div id="delivery-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+  </div>
+
+  <!-- Top Performing Titles -->
+  <div class="mb-6" id="top-performers-section">
+    <div class="section-header">
+      <span class="icon-bubble">
+        <svg class="w-4 h-4 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/></svg>
+      </span>
+      <h3>Top performing titles</h3>
+    </div>
+    <div id="top-performers" class="grid grid-cols-1 md:grid-cols-3 gap-3"></div>
+  </div>
+
+  <!-- Full validation report -->
+  <details class="disclosure mb-6">
+    <summary>
+      <svg class="chev w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
+      <span>See full validation report</span>
+    </summary>
+    <div class="body">
+      <div id="review-formatted" class="vr"></div>
+    </div>
   </details>
 
-  <div class="mt-8 flex justify-between">
-    <button class="btn-ghost" onclick="goToStep(1)">← Start over</button>
-    <button class="btn-primary" onclick="goToStep(3)">Continue →</button>
+  <div class="flex justify-between">
+    <button class="btn-ghost" onclick="goToStep(1)">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+      Start over
+    </button>
+    <button class="btn-primary" onclick="goToStep(3)">
+      Continue
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+    </button>
   </div>
 </section>
 
 <!-- STEP 3: Customise -->
-<section id="step-3" class="card p-8 hidden">
+<section id="step-3" class="card-elev p-8 hidden">
   <h2 class="text-xl font-semibold">A few choices to make</h2>
   <p class="text-sm text-gray-500 mt-1 mb-6">Defaults are sensible — skip what you don't need.</p>
 
-  <!-- Output type -->
   <div class="mb-8">
     <div class="text-sm font-medium mb-3">What should I build?</div>
     <div class="grid grid-cols-3 gap-3">
       <label class="section-chip text-center" data-output="one_pager">
         <input type="radio" name="output_type" value="one_pager" class="hidden" />
-        <div class="text-2xl">📄</div>
-        <div class="text-sm mt-1">One-pager</div>
+        <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        <div class="text-sm mt-2">One-pager</div>
       </label>
       <label class="section-chip text-center selected" data-output="both">
         <input type="radio" name="output_type" value="both" class="hidden" checked />
-        <div class="text-2xl">📊</div>
-        <div class="text-sm mt-1 font-medium">Both</div>
+        <svg class="w-7 h-7 mx-auto text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+        <div class="text-sm mt-2 font-medium">Both</div>
       </label>
       <label class="section-chip text-center" data-output="slide_deck">
         <input type="radio" name="output_type" value="slide_deck" class="hidden" />
-        <div class="text-2xl">🎞️</div>
-        <div class="text-sm mt-1">Full deck</div>
+        <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
+        <div class="text-sm mt-2">Full deck</div>
       </label>
     </div>
   </div>
 
-  <!-- Sections -->
   <div class="mb-8">
     <div class="flex items-center justify-between mb-3">
       <div class="text-sm font-medium">Which sections to include</div>
@@ -103,7 +148,6 @@
     <div id="sections-grid" class="grid grid-cols-2 gap-2"></div>
   </div>
 
-  <!-- Exec summary -->
   <div class="mb-6">
     <div class="flex items-center justify-between mb-2">
       <div class="text-sm font-medium">Executive summary</div>
@@ -115,7 +159,6 @@
     <div class="text-xs text-gray-500 mt-1"><span id="summary-count">0</span> / 550 characters</div>
   </div>
 
-  <!-- Advanced -->
   <details class="bg-gray-50 rounded-lg p-4">
     <summary class="cursor-pointer text-sm font-medium text-gray-700">Advanced options</summary>
     <div class="mt-4 space-y-3">
@@ -131,20 +174,26 @@
   </details>
 
   <div class="mt-8 flex justify-between">
-    <button class="btn-ghost" onclick="goToStep(2)">← Back</button>
-    <button class="btn-primary" onclick="startGeneration()">Generate →</button>
+    <button class="btn-ghost" onclick="goToStep(2)">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+      Back
+    </button>
+    <button class="btn-primary" onclick="startGeneration()">
+      Generate
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+    </button>
   </div>
 </section>
 
 <!-- STEP 4: Generating -->
-<section id="step-4" class="card p-10 hidden">
+<section id="step-4" class="card-elev p-10 hidden">
   <h2 class="text-xl font-semibold mb-1">Building your PCA</h2>
   <p class="text-sm text-gray-500 mb-6">This usually takes around 30 seconds.</p>
   <div id="progress-list" class="space-y-2"></div>
 </section>
 
 <!-- STEP 5: Done -->
-<section id="step-5" class="card p-10 hidden text-center">
+<section id="step-5" class="card-elev p-10 hidden text-center">
   <div class="w-14 h-14 mx-auto bg-green-100 rounded-full flex items-center justify-center">
     <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
   </div>
@@ -218,7 +267,7 @@ async function handleFile(file) {
   state.file = file;
   const statusEl = document.getElementById('upload-status');
   statusEl.classList.remove('hidden');
-  statusEl.innerHTML = `<svg class="spinner inline-block w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="40 60"/></svg> Reading and validating ${file.name}…`;
+  statusEl.innerHTML = `<svg class="spinner inline-block w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="40 60"/></svg> Reading and validating ${escapeHtml(file.name)}…`;
 
   const fd = new FormData();
   fd.append('eoc_file', file);
@@ -236,18 +285,11 @@ async function handleFile(file) {
     await loadSections();
     goToStep(2);
   } catch (err) {
-    statusEl.innerHTML = `<span class="text-red-600">⚠ ${err.message}. Please check the file and try again.</span>`;
+    statusEl.innerHTML = `<span class="text-red-600">⚠ ${escapeHtml(err.message)}. Please check the file and try again.</span>`;
   }
 }
 
 // ----- Step 2: Review -----
-//
-// Backend returns:
-//   filename, status, app_version
-//   display_validation_text      (markdown summary)
-//   default_exec_summary         (pre-written GPT-style summary)
-//   summary_inputs               (the actual mapped campaign data)
-//
 function renderReview() {
   const v = state.validation;
   const inputs = v.summary_inputs || {};
@@ -255,70 +297,189 @@ function renderReview() {
   document.getElementById('review-filename').textContent =
     `${v.filename || 'EOC file'} · ${new Date().toLocaleString()}`;
 
-  // Headline tiles - identity + dates
-  const headlineFields = [
-    { key: 'campaign_name', label: 'Campaign' },
-    { key: 'client',        label: 'Client' },
-    { key: 'markets',       label: 'Markets' },
-    { key: 'live_dates',    label: 'Live dates' },
-  ];
-  const tiles = document.getElementById('review-tiles');
-  tiles.innerHTML = '';
-  headlineFields.forEach(f => {
-    const val = inputs[f.key];
-    if (val) {
-      tiles.insertAdjacentHTML('beforeend',
-        `<div class="bg-gray-50 rounded-lg p-3">
-           <div class="text-xs text-gray-500">${f.label}</div>
-           <div class="text-sm font-medium mt-1 break-words">${escapeHtml(val)}</div>
-         </div>`);
-    }
-  });
+  // Campaign Overview
+  renderTiles('campaign-tiles', [
+    { key: 'campaign_name',   label: 'Campaign' },
+    { key: 'client',          label: 'Client' },
+    { key: 'markets',         label: 'Markets' },
+    { key: 'live_dates',      label: 'Live dates' },
+  ], inputs);
 
-  // Performance metrics
-  const metricFields = [
+  // Performance Metrics
+  renderTiles('performance-tiles', [
+    { key: 'ctr',                 label: 'CTR' },
+    { key: 'engagement_rate',     label: 'Engagement rate' },
+    { key: 'vcr',                 label: 'VCR' },
+    { key: 'on_screen_rate',      label: 'On-screen rate' },
+  ], inputs);
+
+  // Delivery & Spend
+  renderTiles('delivery-tiles', [
     { key: 'delivered_impressions', label: 'Impressions' },
-    { key: 'ctr',                   label: 'CTR' },
-    { key: 'engagement_rate',       label: 'Engagement rate' },
-    { key: 'vcr',                   label: 'VCR' },
-    { key: 'on_screen_rate',        label: 'On-screen rate' },
-    { key: 'delivery_incl_av',      label: 'Delivery (incl. AV)' },
     { key: 'budget',                label: 'Budget' },
+    { key: 'delivery_incl_av',      label: 'Delivery (incl. AV)' },
     { key: 'added_value_worth',     label: 'Added value' },
-  ];
-  const metrics = document.getElementById('review-metrics');
-  metrics.innerHTML = '';
-  metricFields.forEach(f => {
-    const val = inputs[f.key];
-    if (val) {
-      metrics.insertAdjacentHTML('beforeend',
-        `<div class="bg-gray-50 rounded-lg p-3">
-           <div class="text-xs text-gray-500">${f.label}</div>
-           <div class="text-sm font-medium mt-1">${escapeHtml(val)}</div>
-         </div>`);
-    }
-  });
+  ], inputs);
 
-  // Warnings / OK status. Backend returns no explicit validation field in
-  // current shape, but a 200 + populated summary_inputs implies success.
+  // Top performers
+  renderTopPerformers(inputs);
+
+  // Status banner
   const warnEl = document.getElementById('review-warnings');
-  warnEl.innerHTML = '';
   const populated = Object.keys(inputs).length;
   if (populated === 0) {
-    warnEl.insertAdjacentHTML('beforeend',
+    warnEl.innerHTML =
       `<div class="flex gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">
          <span>⚠</span><div>The file parsed, but no campaign fields were extracted. Check the EOC sheet structure.</div>
-       </div>`);
+       </div>`;
   } else {
-    warnEl.insertAdjacentHTML('beforeend',
-      `<div class="text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg p-3">
-         ✓ ${populated} fields validated. Ready to build.
-       </div>`);
+    warnEl.innerHTML =
+      `<div class="flex items-center gap-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
+         <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+         <span><strong>EOC has been validated.</strong> Ready to build.</span>
+       </div>`;
   }
 
-  // Full validation report (uses backend's markdown text directly)
-  document.getElementById('review-raw').textContent =
-    v.display_validation_text || JSON.stringify(inputs, null, 2);
+  // Formatted validation report
+  renderFormattedReport(v.display_validation_text || '');
+}
+
+function renderTiles(containerId, fields, inputs) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  fields.forEach(f => {
+    const val = inputs[f.key];
+    if (val) {
+      el.insertAdjacentHTML('beforeend', `
+        <div class="metric-tile">
+          <div class="label">${escapeHtml(f.label)}</div>
+          <div class="value">${escapeHtml(val)}</div>
+        </div>`);
+    }
+  });
+}
+
+function renderTopPerformers(inputs) {
+  const groups = [
+    { key: 'top_ctr',             title: 'CTR' },
+    { key: 'top_engagement_rate', title: 'Engagement rate' },
+    { key: 'top_vcr',             title: 'VCR' },
+  ];
+  const container = document.getElementById('top-performers');
+  container.innerHTML = '';
+  let anyShown = false;
+
+  groups.forEach(g => {
+    const list = inputs[g.key];
+    if (Array.isArray(list) && list.length) {
+      anyShown = true;
+      const items = list.map(item => `
+        <li>
+          <span class="name">${escapeHtml(item.name || '—')}</span>
+          <span class="val">${escapeHtml(item.value || '—')}</span>
+        </li>`).join('');
+      container.insertAdjacentHTML('beforeend', `
+        <div class="top-card">
+          <h4>${escapeHtml(g.title)}</h4>
+          <ol>${items}</ol>
+        </div>`);
+    }
+  });
+
+  document.getElementById('top-performers-section').classList.toggle('hidden', !anyShown);
+}
+
+function renderFormattedReport(markdown) {
+  if (!markdown) {
+    document.getElementById('review-formatted').innerHTML =
+      '<p class="text-sm text-gray-500">No validation report available.</p>';
+    return;
+  }
+
+  // Parse the GPT-style markdown into structured sections.
+  // Format expected:
+  //   **Section Header**
+  //   <blank line>
+  //   • **Key:** value
+  //   • **Key:** value
+  //   <blank line>
+  //   **Next Section**
+  //   ...
+  // Some sections (Creative Formats, Top Performing Titles) use sub-headers
+  // and plain bullet lists instead of key:value pairs.
+  const lines = markdown.split('\n');
+  const sections = [];
+  let current = null;
+  let subHeader = null;
+
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line) { subHeader = null; continue; }
+
+    // Section header: **Title** on its own line (no colon)
+    const sectionMatch = line.match(/^\*\*([^*:]+)\*\*$/);
+    if (sectionMatch) {
+      current = { title: sectionMatch[1].trim(), blocks: [] };
+      sections.push(current);
+      subHeader = null;
+      continue;
+    }
+    if (!current) continue;
+
+    // Bullet with key:value pair: • **Key:** value
+    const kvMatch = line.match(/^[•\-]\s*\*\*([^:*]+):\*\*\s*(.+)$/);
+    if (kvMatch) {
+      ensureBlock(current, 'kv', subHeader).items.push({
+        k: kvMatch[1].trim(),
+        v: kvMatch[2].trim(),
+      });
+      continue;
+    }
+
+    // Plain bullet: • text
+    const bulletMatch = line.match(/^[•\-]\s+(.+)$/);
+    if (bulletMatch) {
+      ensureBlock(current, 'list', subHeader).items.push(bulletMatch[1].trim());
+      continue;
+    }
+
+    // Sub-header within a section (e.g. "CTR", "ER", "VCR" in Top Performing Titles)
+    if (!line.startsWith('*') && !line.startsWith('•') && !line.startsWith('-')) {
+      subHeader = line;
+      continue;
+    }
+  }
+
+  const html = sections.map(s => {
+    const body = s.blocks.map(b => {
+      const subTitle = b.subHeader
+        ? `<div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-3 mb-1">${escapeHtml(b.subHeader)}</div>`
+        : '';
+      if (b.type === 'kv') {
+        const rows = b.items.map(i =>
+          `<div class="vr-row"><span class="k">${escapeHtml(i.k)}</span><span class="v">${escapeHtml(i.v)}</span></div>`
+        ).join('');
+        return subTitle + rows;
+      } else {
+        const items = b.items.map(i => `<li>${escapeHtml(i)}</li>`).join('');
+        return subTitle + `<ul class="vr-list">${items}</ul>`;
+      }
+    }).join('');
+    return `<div class="vr-section"><h4>${escapeHtml(s.title)}</h4>${body}</div>`;
+  }).join('');
+
+  document.getElementById('review-formatted').innerHTML = html ||
+    `<pre class="text-xs whitespace-pre-wrap text-gray-600">${escapeHtml(markdown)}</pre>`;
+}
+
+function ensureBlock(section, type, subHeader) {
+  const last = section.blocks[section.blocks.length - 1];
+  if (last && last.type === type && (last.subHeader || null) === (subHeader || null)) {
+    return last;
+  }
+  const newBlock = { type, items: [], subHeader: subHeader || null };
+  section.blocks.push(newBlock);
+  return newBlock;
 }
 
 function escapeHtml(str) {
@@ -340,9 +501,9 @@ async function loadSections() {
     if (s.section_id === 'TITLE_OVERVIEW') return;
     const isSel = state.selectedSections.has(s.section_id);
     grid.insertAdjacentHTML('beforeend', `
-      <label class="section-chip flex items-center gap-2 ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''}" data-section="${s.section_id}">
+      <label class="section-chip flex items-center gap-2 ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''}" data-section="${escapeHtml(s.section_id)}">
         <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
-        <span class="text-sm">${s.label}${s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : ''}</span>
+        <span class="text-sm">${escapeHtml(s.label)}${s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : ''}</span>
       </label>
     `);
   });
@@ -364,7 +525,6 @@ async function loadSections() {
     });
   });
 
-  // Pre-fill exec summary with the backend's default
   const ta = document.getElementById('exec-summary-input');
   ta.value = state.execSummary;
   document.getElementById('summary-count').textContent = ta.value.length;
@@ -431,7 +591,7 @@ async function startGeneration() {
   list.innerHTML = steps.map((s, i) =>
     `<div class="prog-item flex items-center gap-3 p-3 bg-gray-50 rounded-lg" data-i="${i}">
       <span class="prog-icon w-5 h-5 inline-block text-gray-400">○</span>
-      <span class="text-sm">${s}</span>
+      <span class="text-sm">${escapeHtml(s)}</span>
     </div>`).join('');
 
   for (let i = 0; i < steps.length - 1; i++) {
@@ -458,7 +618,7 @@ async function startGeneration() {
     setTimeout(() => showDone(data), 500);
   } catch (err) {
     list.insertAdjacentHTML('beforeend',
-      `<div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">⚠ ${err.message}</div>
+      `<div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">⚠ ${escapeHtml(err.message)}</div>
        <button class="btn-ghost mt-4" onclick="goToStep(3)">← Try again</button>`);
   }
 }
@@ -478,18 +638,26 @@ function showDone(data) {
   dl.innerHTML = '';
   if (data.one_pager_url) {
     dl.insertAdjacentHTML('beforeend', `
-      <a href="${data.one_pager_url}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left">
-        <div class="text-3xl mb-2">📄</div>
-        <div class="font-medium">One-pager</div>
-        <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
+      <a href="${escapeHtml(data.one_pager_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3">
+        <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
+          <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        </div>
+        <div>
+          <div class="font-medium">One-pager</div>
+          <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
+        </div>
       </a>`);
   }
   if (data.deck_url) {
     dl.insertAdjacentHTML('beforeend', `
-      <a href="${data.deck_url}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left">
-        <div class="text-3xl mb-2">🎞️</div>
-        <div class="font-medium">Slide deck</div>
-        <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
+      <a href="${escapeHtml(data.deck_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3">
+        <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
+          <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
+        </div>
+        <div>
+          <div class="font-medium">Slide deck</div>
+          <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
+        </div>
       </a>`);
   }
 }
