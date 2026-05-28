@@ -5,29 +5,23 @@ Web-app endpoints for the PCA Automation Generator.
 
 Lives at: app/web_routes.py (alongside app/main.py)
 
-This module adds a parallel set of endpoints designed for browser-based
-multipart file uploads (instead of OpenAI Actions' openaiFileIdRefs pattern).
-
-It REUSES all existing logic from main.py - no main.py functions are
-modified, only imported.
-
-The existing GPT-facing endpoints in main.py remain untouched. Both
-surfaces can run side by side.
-
-To wire this in, add to the bottom of main.py:
-    from web_routes import register_web_routes
-    register_web_routes(app)
+v3 changes:
+- Adds cleanup_old_files() that deletes generated .pptx files older
+  than FILE_RETENTION_DAYS (default 30). Database rows are kept forever.
+- Runs cleanup on startup and every 24 hours via a background task.
+- /history page hides download links for files that have been cleaned up.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
 import tempfile
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -47,20 +41,30 @@ from fastapi.templating import Jinja2Templates
 
 
 # ----- Paths ----------------------------------------------------------------
-# This file lives in app/, same place as main.py
 APP_DIR = Path(__file__).resolve().parent
 WEB_TEMPLATES_DIR = APP_DIR / "web_templates"
 STATIC_DIR = APP_DIR / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
-# DB lives on the Render disk (persistent). Falls back to /tmp locally.
 DB_PATH = Path(os.getenv("PCA_DB_PATH", APP_DIR / "pca.db"))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+GENERATED_FILES_DIR = Path(
+    os.getenv("GENERATED_FILES_DIR", tempfile.gettempdir())
+)
+GENERATED_FILES_DIR.mkdir(parents=True, exist_ok=True)
+
+# How long generated PPT files are kept before being deleted from disk.
+# Database history rows are kept indefinitely.
+FILE_RETENTION_DAYS = int(os.getenv("FILE_RETENTION_DAYS", "30"))
+
+# How often the cleanup task runs (in seconds). Default: every 24 hours.
+CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 
 PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
-# ----- Database (SQLite) ----------------------------------------------------
+# ----- Database -------------------------------------------------------------
 
 
 def db_connect() -> sqlite3.Connection:
@@ -104,14 +108,90 @@ def db_init() -> None:
 db_init()
 
 
-# ----- Auth (Google OAuth) --------------------------------------------------
+# ----- File cleanup ---------------------------------------------------------
+
+
+def cleanup_old_files() -> Dict[str, int]:
+    """
+    Delete generated .pptx files older than FILE_RETENTION_DAYS.
+    Returns counts for logging. Safe to run repeatedly.
+    """
+    cutoff_iso = (datetime.utcnow() - timedelta(days=FILE_RETENTION_DAYS)).isoformat()
+    deleted_files = 0
+    missing_files = 0
+    errors = 0
+
+    try:
+        with db_connect() as conn:
+            old_runs = conn.execute(
+                """SELECT run_id, one_pager_filename, deck_filename
+                   FROM runs
+                   WHERE created_at < ?
+                     AND (one_pager_filename IS NOT NULL OR deck_filename IS NOT NULL)""",
+                (cutoff_iso,),
+            ).fetchall()
+
+        for row in old_runs:
+            for column in ("one_pager_filename", "deck_filename"):
+                filename = row[column]
+                if not filename:
+                    continue
+                file_path = GENERATED_FILES_DIR / filename
+                try:
+                    if file_path.exists():
+                        file_path.unlink()
+                        deleted_files += 1
+                    else:
+                        missing_files += 1
+                except Exception:
+                    errors += 1
+                    traceback.print_exc()
+
+            # Null out the filenames in the DB so the UI knows to hide
+            # the download link. We keep the row itself forever.
+            try:
+                with db_connect() as conn:
+                    conn.execute(
+                        """UPDATE runs
+                           SET one_pager_filename = NULL, deck_filename = NULL
+                           WHERE run_id = ?""",
+                        (row["run_id"],),
+                    )
+            except Exception:
+                errors += 1
+                traceback.print_exc()
+
+    except Exception:
+        traceback.print_exc()
+        errors += 1
+
+    if deleted_files or missing_files or errors:
+        print(
+            f"[cleanup] deleted={deleted_files} "
+            f"already_missing={missing_files} errors={errors} "
+            f"(retention={FILE_RETENTION_DAYS}d)"
+        )
+    return {"deleted": deleted_files, "missing": missing_files, "errors": errors}
+
+
+async def _cleanup_loop() -> None:
+    """Background task: run cleanup on startup, then every 24 hours."""
+    while True:
+        try:
+            cleanup_old_files()
+        except Exception:
+            traceback.print_exc()
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+
+
+# ----- Auth -----------------------------------------------------------------
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from starlette.middleware.sessions import SessionMiddleware
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-ALLOWED_EMAIL_DOMAIN = os.getenv("ALLOWED_EMAIL_DOMAIN", "")  # e.g. "mobkoi.com"
+ALLOWED_EMAIL_DOMAIN = os.getenv("ALLOWED_EMAIL_DOMAIN", "")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-render-env-vars")
 APP_BASE_URL = os.getenv(
     "PUBLIC_BASE_URL",
@@ -197,10 +277,6 @@ async def logout(request: Request):
 
 @router.get("/web")
 async def web_landing(request: Request):
-    """
-    Web app landing page. Lives at /web instead of / because the existing
-    main.py already owns / for its JSON health response (used by the GPT).
-    """
     if current_user(request):
         return RedirectResponse(url="/app")
     return templates.TemplateResponse(request, "landing.html")
@@ -232,14 +308,15 @@ async def history_page(request: Request):
     return templates.TemplateResponse(
         request,
         "history.html",
-        {"user": user, "runs": [dict(r) for r in rows]},
+        {
+            "user": user,
+            "runs": [dict(r) for r in rows],
+            "retention_days": FILE_RETENTION_DAYS,
+        },
     )
 
 
-# ----- API used by the wizard frontend --------------------------------------
-#
-# All imports of main.py happen INSIDE function bodies to avoid any
-# circular-import issues at module load time.
+# ----- API ------------------------------------------------------------------
 
 
 @router.get("/api/sections")
@@ -261,7 +338,6 @@ async def api_list_sections(user=Depends(require_user)):
 
 @router.post("/api/validate")
 async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
-    """Accepts a direct EOC upload and runs validation."""
     require_user(request)
 
     from main import (
@@ -298,13 +374,12 @@ async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
 async def api_generate(
     request: Request,
     eoc_file: UploadFile = File(...),
-    output_type: str = Form(...),                  # 'one_pager' | 'slide_deck' | 'both'
+    output_type: str = Form(...),
     selected_sections: str = Form("[]"),
     deck_mode: str = Form("matching"),
     custom_deck_sections: str = Form("[]"),
     exec_summary: str = Form(""),
 ):
-    """Accepts EOC + choices, runs the existing pipeline, stores the result."""
     user = require_user(request)
 
     from main import (
@@ -441,3 +516,7 @@ def register_web_routes(app: FastAPI) -> None:
     app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(router)
+
+    @app.on_event("startup")
+    async def _start_cleanup_task():
+        asyncio.create_task(_cleanup_loop())
