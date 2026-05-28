@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="max-w-md mx-auto text-center pt-16">
-  <div class="card p-8">
+<div class="max-w-md mx-auto text-center pt-20">
+  <div class="card-elev p-10">
     <div class="w-12 h-12 mx-auto bg-red-100 rounded-full flex items-center justify-center">
       <svg class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
     </div>
-    <h1 class="mt-4 text-xl font-semibold">Access denied</h1>
-    <p class="mt-2 text-sm text-gray-600">
+    <h1 class="mt-5 text-xl font-semibold">Access denied</h1>
+    <p class="mt-2 text-sm text-gray-600 leading-relaxed">
       <strong>{{ email }}</strong> isn't an authorised work email. This tool is restricted to <strong>@{{ allowed_domain }}</strong> accounts.
     </p>
     <a href="/" class="mt-6 inline-block btn-primary">Try again</a>
