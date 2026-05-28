@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}PCA History{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-semibold">Your PCAs</h1>
+    <p class="text-sm text-gray-500 mt-1">Re-download any PCA you've generated. Files are kept for 30 days.</p>
+  </div>
+  <a href="/app" class="btn-primary">New PCA</a>
+</div>
+
+{% if not runs %}
+<div class="card p-10 text-center text-gray-500">
+  <div class="text-4xl mb-3">📭</div>
+  <p>No PCAs yet. <a href="/app" class="text-blue-600 hover:underline">Build your first one</a>.</p>
+</div>
+{% else %}
+<div class="card overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr class="text-left text-gray-600">
+        <th class="px-4 py-3 font-medium">When</th>
+        <th class="px-4 py-3 font-medium">EOC file</th>
+        <th class="px-4 py-3 font-medium">Type</th>
+        <th class="px-4 py-3 font-medium">Status</th>
+        <th class="px-4 py-3 font-medium text-right">Downloads</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for run in runs %}
+      <tr>
+        <td class="px-4 py-3 text-gray-600">{{ run.created_at[:16].replace('T', ' ') }}</td>
+        <td class="px-4 py-3 font-medium truncate max-w-xs">{{ run.eoc_filename or '—' }}</td>
+        <td class="px-4 py-3 text-gray-600">{{ run.output_type.replace('_', ' ') }}</td>
+        <td class="px-4 py-3">
+          {% if run.status == 'completed' %}
+            <span class="text-green-700 bg-green-100 text-xs px-2 py-0.5 rounded-full">✓ done</span>
+          {% else %}
+            <span class="text-red-700 bg-red-100 text-xs px-2 py-0.5 rounded-full">failed</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-3 text-right">
+          {% if run.one_pager_filename %}<a href="/files/{{ run.one_pager_filename }}" class="text-blue-600 hover:underline mr-3">One-pager</a>{% endif %}
+          {% if run.deck_filename %}<a href="/files/{{ run.deck_filename }}" class="text-blue-600 hover:underline">Deck</a>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}

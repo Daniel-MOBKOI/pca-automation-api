@@ -1,0 +1,437 @@
+{% extends "base.html" %}
+{% block title %}Create PCA{% endblock %}
+{% block content %}
+
+<div id="stepper" class="flex items-center gap-3 mb-8 text-sm text-gray-500">
+  <span class="flex items-center gap-2"><span class="step-dot active" data-step="1">1</span> Upload</span>
+  <span class="text-gray-300">›</span>
+  <span class="flex items-center gap-2"><span class="step-dot pending" data-step="2">2</span> Review</span>
+  <span class="text-gray-300">›</span>
+  <span class="flex items-center gap-2"><span class="step-dot pending" data-step="3">3</span> Customise</span>
+  <span class="text-gray-300">›</span>
+  <span class="flex items-center gap-2"><span class="step-dot pending" data-step="4">4</span> Generate</span>
+  <span class="text-gray-300">›</span>
+  <span class="flex items-center gap-2"><span class="step-dot pending" data-step="5">5</span> Done</span>
+</div>
+
+<!-- STEP 1: Upload -->
+<section id="step-1" class="card p-10">
+  <div class="text-center">
+    <h2 class="text-2xl font-semibold text-gray-900">Let's build your PCA</h2>
+    <p class="mt-2 text-gray-600">Drop your end-of-campaign Excel file below and I'll handle the rest.</p>
+  </div>
+  <div id="dropzone" class="drop-zone mt-8 rounded-xl p-12 text-center cursor-pointer">
+    <input type="file" id="file-input" accept=".xlsx,.xls" class="hidden" />
+    <svg class="w-10 h-10 mx-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.9 5 5 0 019.9-1A5.5 5.5 0 0118.5 16H17m-7 4l3-3m0 0l3 3m-3-3v8"/></svg>
+    <p class="mt-3 font-medium text-gray-700">Drop your EOC file here</p>
+    <p class="text-sm text-gray-500">or click to browse · .xlsx, .xls</p>
+  </div>
+  <div id="upload-status" class="hidden mt-6 text-center text-sm text-gray-600"></div>
+</section>
+
+<!-- STEP 2: Review -->
+<section id="step-2" class="card p-8 hidden">
+  <div class="flex items-center gap-3 mb-2">
+    <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+      <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+    </div>
+    <h2 class="text-xl font-semibold">Got it — here's what I found</h2>
+  </div>
+  <p id="review-filename" class="text-sm text-gray-500 mb-6"></p>
+
+  <div id="review-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"></div>
+
+  <div id="review-warnings" class="space-y-2 mb-6"></div>
+
+  <details class="mt-4">
+    <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-900">See all validated data</summary>
+    <pre id="review-raw" class="mt-3 p-4 bg-gray-50 rounded text-xs overflow-x-auto"></pre>
+  </details>
+
+  <div class="mt-8 flex justify-between">
+    <button class="btn-ghost" onclick="goToStep(1)">← Start over</button>
+    <button class="btn-primary" onclick="goToStep(3)">Continue →</button>
+  </div>
+</section>
+
+<!-- STEP 3: Customise -->
+<section id="step-3" class="card p-8 hidden">
+  <h2 class="text-xl font-semibold">A few choices to make</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-6">Defaults are sensible — skip what you don't need.</p>
+
+  <!-- Output type -->
+  <div class="mb-8">
+    <div class="text-sm font-medium mb-3">What should I build?</div>
+    <div class="grid grid-cols-3 gap-3">
+      <label class="section-chip text-center" data-output="one_pager">
+        <input type="radio" name="output_type" value="one_pager" class="hidden" />
+        <div class="text-2xl">📄</div>
+        <div class="text-sm mt-1">One-pager</div>
+      </label>
+      <label class="section-chip text-center selected" data-output="both">
+        <input type="radio" name="output_type" value="both" class="hidden" checked />
+        <div class="text-2xl">📊</div>
+        <div class="text-sm mt-1 font-medium">Both</div>
+      </label>
+      <label class="section-chip text-center" data-output="slide_deck">
+        <input type="radio" name="output_type" value="slide_deck" class="hidden" />
+        <div class="text-2xl">🎞️</div>
+        <div class="text-sm mt-1">Full deck</div>
+      </label>
+    </div>
+  </div>
+
+  <!-- Sections -->
+  <div class="mb-8">
+    <div class="flex items-center justify-between mb-3">
+      <div class="text-sm font-medium">Which sections to include</div>
+      <div class="flex gap-2 text-xs">
+        <button class="text-blue-600 hover:underline" onclick="selectAllSections()">Select all</button>
+        <span class="text-gray-300">|</span>
+        <button class="text-blue-600 hover:underline" onclick="selectNoSections()">Clear</button>
+      </div>
+    </div>
+    <div id="sections-grid" class="grid grid-cols-2 gap-2"></div>
+  </div>
+
+  <!-- Exec summary -->
+  <div class="mb-6">
+    <div class="text-sm font-medium mb-2">Executive summary</div>
+    <textarea id="exec-summary-input" rows="4" maxlength="550"
+      class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+      placeholder="Write your own, or leave blank to use the default."></textarea>
+    <div class="text-xs text-gray-500 mt-1"><span id="summary-count">0</span> / 550 characters</div>
+  </div>
+
+  <!-- Advanced -->
+  <details class="bg-gray-50 rounded-lg p-4">
+    <summary class="cursor-pointer text-sm font-medium text-gray-700">Advanced options</summary>
+    <div class="mt-4 space-y-3">
+      <div>
+        <label class="text-xs text-gray-600">Deck mode (when building slide deck)</label>
+        <select id="deck-mode" class="block w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm">
+          <option value="matching" selected>Matching (uses same sections as one-pager)</option>
+          <option value="full">Full (all available slides)</option>
+          <option value="custom">Custom (pick deck sections separately)</option>
+        </select>
+      </div>
+    </div>
+  </details>
+
+  <div class="mt-8 flex justify-between">
+    <button class="btn-ghost" onclick="goToStep(2)">← Back</button>
+    <button class="btn-primary" onclick="startGeneration()">Generate →</button>
+  </div>
+</section>
+
+<!-- STEP 4: Generating -->
+<section id="step-4" class="card p-10 hidden">
+  <h2 class="text-xl font-semibold mb-1">Building your PCA</h2>
+  <p class="text-sm text-gray-500 mb-6">This usually takes around 30 seconds.</p>
+  <div id="progress-list" class="space-y-2"></div>
+</section>
+
+<!-- STEP 5: Done -->
+<section id="step-5" class="card p-10 hidden text-center">
+  <div class="w-14 h-14 mx-auto bg-green-100 rounded-full flex items-center justify-center">
+    <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+  </div>
+  <h2 class="mt-4 text-2xl font-semibold">Your PCA is ready</h2>
+  <p id="done-meta" class="mt-1 text-gray-500"></p>
+
+  <div id="done-downloads" class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl mx-auto"></div>
+
+  <div class="mt-8 flex justify-center gap-3">
+    <a href="/history" class="btn-ghost">View history</a>
+    <button class="btn-primary" onclick="resetAll()">Build another</button>
+  </div>
+</section>
+
+<script>
+// ----- State -----
+const state = {
+  step: 1,
+  file: null,
+  validation: null,
+  sections: [],
+  outputType: 'both',
+  selectedSections: new Set(),
+  deckMode: 'matching',
+  execSummary: '',
+};
+
+// ----- Step navigation -----
+function goToStep(n) {
+  state.step = n;
+  for (let i = 1; i <= 5; i++) {
+    document.getElementById('step-' + i).classList.toggle('hidden', i !== n);
+    const dot = document.querySelector(`.step-dot[data-step="${i}"]`);
+    dot.classList.remove('active', 'done', 'pending');
+    if (i < n) dot.classList.add('done');
+    else if (i === n) dot.classList.add('active');
+    else dot.classList.add('pending');
+  }
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function resetAll() {
+  state.file = null;
+  state.validation = null;
+  state.selectedSections.clear();
+  document.getElementById('file-input').value = '';
+  document.getElementById('exec-summary-input').value = '';
+  goToStep(1);
+}
+
+// ----- Step 1: Upload -----
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length) handleFile(e.target.files[0]);
+});
+
+async function handleFile(file) {
+  state.file = file;
+  const statusEl = document.getElementById('upload-status');
+  statusEl.classList.remove('hidden');
+  statusEl.innerHTML = `<svg class="spinner inline-block w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="40 60"/></svg> Reading and validating ${file.name}…`;
+
+  const fd = new FormData();
+  fd.append('eoc_file', file);
+
+  try {
+    const res = await fetch('/api/validate', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Validation failed' }));
+      throw new Error(err.detail || 'Validation failed');
+    }
+    state.validation = await res.json();
+    renderReview();
+    await loadSections();
+    goToStep(2);
+  } catch (err) {
+    statusEl.innerHTML = `<span class="text-red-600">⚠ ${err.message}. Please check the file and try again.</span>`;
+  }
+}
+
+// ----- Step 2: Review -----
+function renderReview() {
+  const v = state.validation;
+  document.getElementById('review-filename').textContent =
+    `${v.filename || 'EOC file'} · ${new Date().toLocaleString()}`;
+
+  const display = v.display_values || {};
+  const tiles = document.getElementById('review-tiles');
+  tiles.innerHTML = '';
+  const prioritized = ['CAMPAIGN_NAME', 'BRAND_NAME', 'FLIGHT_DATES', 'TOTAL_IMPRESSIONS', 'CTR', 'MARKETS'];
+  let count = 0;
+  for (const key of prioritized) {
+    if (display[key] && count < 4) {
+      tiles.insertAdjacentHTML('beforeend',
+        `<div class="bg-gray-50 rounded-lg p-3"><div class="text-xs text-gray-500">${key.replace(/_/g, ' ')}</div><div class="text-sm font-medium mt-1 truncate">${display[key]}</div></div>`);
+      count++;
+    }
+  }
+  // Fill any remainder with whatever else is on display
+  if (count < 4) {
+    for (const [k, val] of Object.entries(display)) {
+      if (count >= 4) break;
+      if (prioritized.includes(k)) continue;
+      tiles.insertAdjacentHTML('beforeend',
+        `<div class="bg-gray-50 rounded-lg p-3"><div class="text-xs text-gray-500">${k.replace(/_/g, ' ')}</div><div class="text-sm font-medium mt-1 truncate">${val}</div></div>`);
+      count++;
+    }
+  }
+
+  // Warnings
+  const warnEl = document.getElementById('review-warnings');
+  warnEl.innerHTML = '';
+  const warnings = (v.validation && v.validation.warnings) || [];
+  const missing = (v.validation && v.validation.missing_required) || [];
+  if (missing.length) {
+    warnEl.insertAdjacentHTML('beforeend',
+      `<div class="flex gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><span>⚠</span><div><strong>Missing required:</strong> ${missing.join(', ')}. We'll generate anyway with N/A placeholders.</div></div>`);
+  }
+  warnings.forEach(w => {
+    warnEl.insertAdjacentHTML('beforeend',
+      `<div class="flex gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><span>⚠</span><div>${w}</div></div>`);
+  });
+  if (!missing.length && !warnings.length) {
+    warnEl.insertAdjacentHTML('beforeend',
+      `<div class="text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg p-3">✓ All required fields present. Ready to build.</div>`);
+  }
+
+  document.getElementById('review-raw').textContent = JSON.stringify(v.mapped_values || {}, null, 2);
+}
+
+// ----- Step 3: Customise -----
+async function loadSections() {
+  const res = await fetch('/api/sections');
+  const data = await res.json();
+  state.sections = data.sections || [];
+
+  // Default: select all non-required by default plus required
+  state.selectedSections = new Set(state.sections.map(s => s.section_id));
+
+  const grid = document.getElementById('sections-grid');
+  grid.innerHTML = '';
+  state.sections.forEach(s => {
+    if (s.section_id === 'TITLE_OVERVIEW') return; // Always included
+    const isSel = state.selectedSections.has(s.section_id);
+    grid.insertAdjacentHTML('beforeend', `
+      <label class="section-chip flex items-center gap-2 ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''}" data-section="${s.section_id}">
+        <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
+        <span class="text-sm">${s.label}${s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : ''}</span>
+      </label>
+    `);
+  });
+  grid.querySelectorAll('label[data-section]').forEach(el => {
+    el.addEventListener('click', e => {
+      const id = el.dataset.section;
+      const cb = el.querySelector('input');
+      if (cb.disabled) return;
+      if (state.selectedSections.has(id)) {
+        state.selectedSections.delete(id);
+        el.classList.remove('selected');
+        cb.checked = false;
+      } else {
+        state.selectedSections.add(id);
+        el.classList.add('selected');
+        cb.checked = true;
+      }
+      e.preventDefault();
+    });
+  });
+}
+
+function selectAllSections() {
+  state.selectedSections = new Set(state.sections.map(s => s.section_id));
+  document.querySelectorAll('#sections-grid label').forEach(el => {
+    el.classList.add('selected');
+    const cb = el.querySelector('input');
+    if (!cb.disabled) cb.checked = true;
+  });
+}
+function selectNoSections() {
+  state.selectedSections.clear();
+  document.querySelectorAll('#sections-grid label').forEach(el => {
+    const cb = el.querySelector('input');
+    if (cb.disabled) {
+      // Required ones stay
+      state.selectedSections.add(el.dataset.section);
+      return;
+    }
+    el.classList.remove('selected');
+    cb.checked = false;
+  });
+}
+
+document.querySelectorAll('[data-output]').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('[data-output]').forEach(x => x.classList.remove('selected'));
+    el.classList.add('selected');
+    state.outputType = el.dataset.output;
+    el.querySelector('input').checked = true;
+  });
+});
+
+document.getElementById('exec-summary-input').addEventListener('input', e => {
+  state.execSummary = e.target.value;
+  document.getElementById('summary-count').textContent = e.target.value.length;
+});
+
+document.getElementById('deck-mode').addEventListener('change', e => {
+  state.deckMode = e.target.value;
+});
+
+// ----- Step 4 + 5: Generate -----
+async function startGeneration() {
+  goToStep(4);
+  const list = document.getElementById('progress-list');
+  const steps = [
+    'Reading EOC data',
+    'Validating campaign data',
+    state.outputType === 'slide_deck' ? null : 'Populating one-pager',
+    state.outputType === 'one_pager' ? null : 'Building slide deck',
+    'Final polish',
+  ].filter(Boolean);
+
+  list.innerHTML = steps.map((s, i) =>
+    `<div class="prog-item flex items-center gap-3 p-3 bg-gray-50 rounded-lg" data-i="${i}">
+      <span class="prog-icon w-5 h-5 inline-block text-gray-400">○</span>
+      <span class="text-sm">${s}</span>
+    </div>`).join('');
+
+  // Animate progress visually (decoupled from real fetch since we have one request)
+  for (let i = 0; i < steps.length - 1; i++) {
+    setTimeout(() => markStep(i, 'active'), i * 400);
+    setTimeout(() => markStep(i, 'done'), (i + 1) * 400);
+  }
+  setTimeout(() => markStep(steps.length - 1, 'active'), (steps.length - 1) * 400);
+
+  // The real call
+  const fd = new FormData();
+  fd.append('eoc_file', state.file);
+  fd.append('output_type', state.outputType);
+  fd.append('selected_sections', JSON.stringify([...state.selectedSections]));
+  fd.append('deck_mode', state.deckMode);
+  fd.append('exec_summary', state.execSummary || '');
+
+  try {
+    const res = await fetch('/api/generate', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Generation failed' }));
+      throw new Error(err.detail || 'Generation failed');
+    }
+    const data = await res.json();
+    markStep(steps.length - 1, 'done');
+    setTimeout(() => showDone(data), 500);
+  } catch (err) {
+    list.insertAdjacentHTML('beforeend',
+      `<div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">⚠ ${err.message}</div>
+       <button class="btn-ghost mt-4" onclick="goToStep(3)">← Try again</button>`);
+  }
+}
+
+function markStep(i, status) {
+  const el = document.querySelector(`.prog-item[data-i="${i}"]`);
+  if (!el) return;
+  const icon = el.querySelector('.prog-icon');
+  if (status === 'active') { icon.innerHTML = '<svg class="spinner w-5 h-5" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="3" stroke-dasharray="40 60"/></svg>'; }
+  else if (status === 'done') { icon.innerHTML = '<span class="text-green-600">✓</span>'; }
+}
+
+function showDone(data) {
+  goToStep(5);
+  document.getElementById('done-meta').textContent = `Run ID ${data.run_id.slice(0, 8)} · ${new Date().toLocaleString()}`;
+  const dl = document.getElementById('done-downloads');
+  dl.innerHTML = '';
+  if (data.one_pager_url) {
+    dl.insertAdjacentHTML('beforeend', `
+      <a href="${data.one_pager_url}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left">
+        <div class="text-3xl mb-2">📄</div>
+        <div class="font-medium">One-pager</div>
+        <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
+      </a>`);
+  }
+  if (data.deck_url) {
+    dl.insertAdjacentHTML('beforeend', `
+      <a href="${data.deck_url}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left">
+        <div class="text-3xl mb-2">🎞️</div>
+        <div class="font-medium">Slide deck</div>
+        <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
+      </a>`);
+  }
+}
+</script>
+
+{% endblock %}
