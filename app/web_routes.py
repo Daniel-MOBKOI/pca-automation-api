@@ -165,8 +165,9 @@ async def auth_callback(request: Request):
     email = (user_info.get("email") or "").lower()
     if ALLOWED_EMAIL_DOMAIN and not email.endswith("@" + ALLOWED_EMAIL_DOMAIN.lower()):
         return templates.TemplateResponse(
+            request,
             "denied.html",
-            {"request": request, "email": email, "allowed_domain": ALLOWED_EMAIL_DOMAIN},
+            {"email": email, "allowed_domain": ALLOWED_EMAIL_DOMAIN},
             status_code=403,
         )
 
@@ -202,7 +203,7 @@ async def web_landing(request: Request):
     """
     if current_user(request):
         return RedirectResponse(url="/app")
-    return templates.TemplateResponse("landing.html", {"request": request})
+    return templates.TemplateResponse(request, "landing.html")
 
 
 @router.get("/app")
@@ -210,7 +211,7 @@ async def app_page(request: Request):
     user = current_user(request)
     if not user:
         return RedirectResponse(url="/web")
-    return templates.TemplateResponse("app.html", {"request": request, "user": user})
+    return templates.TemplateResponse(request, "app.html", {"user": user})
 
 
 @router.get("/history")
@@ -229,8 +230,9 @@ async def history_page(request: Request):
         ).fetchall()
 
     return templates.TemplateResponse(
+        request,
         "history.html",
-        {"request": request, "user": user, "runs": [dict(r) for r in rows]},
+        {"user": user, "runs": [dict(r) for r in rows]},
     )
 
 
