@@ -184,6 +184,32 @@ async def _cleanup_loop() -> None:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
+# Module-level flag so the background task is started exactly once,
+# regardless of which request triggers it first.
+_cleanup_task_started = False
+
+
+def _ensure_cleanup_task_running() -> None:
+    """
+    Start the cleanup background task on first request. This is more
+    reliable than @app.on_event('startup') when register_web_routes()
+    is called after the app has already initialised.
+    """
+    global _cleanup_task_started
+    if _cleanup_task_started:
+        return
+    _cleanup_task_started = True
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(_cleanup_loop())
+        print(f"[cleanup] background task scheduled (retention={FILE_RETENTION_DAYS}d)")
+    except Exception:
+        traceback.print_exc()
+        # If scheduling fails, at least run cleanup once synchronously
+        # so the disk doesn't fill up unbounded.
+        cleanup_old_files()
+
+
 # ----- Auth -----------------------------------------------------------------
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
@@ -517,6 +543,10 @@ def register_web_routes(app: FastAPI) -> None:
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(router)
 
-    @app.on_event("startup")
-    async def _start_cleanup_task():
-        asyncio.create_task(_cleanup_loop())
+    # Middleware that ensures the cleanup background task is running.
+    # Fires on every request, but the function itself is a no-op after
+    # the first call (idempotent via the _cleanup_task_started flag).
+    @app.middleware("http")
+    async def _cleanup_starter_middleware(request, call_next):
+        _ensure_cleanup_task_running()
+        return await call_next(request)
