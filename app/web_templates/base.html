@@ -7,25 +7,91 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="/static/mobkoi-logo.webp" type="image/webp">
 <style>
-  :root { --brand: #111827; --accent: #2563eb; }
-  body { font-family: 'Inter', system-ui, sans-serif; }
-  .btn-primary { background: var(--accent); color: white; padding: 10px 18px; border-radius: 8px; font-weight: 500; transition: opacity .15s; }
-  .btn-primary:hover { opacity: .9; }
+  :root {
+    --brand-bg: #0a0a0a;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --surface: #ffffff;
+    --surface-muted: #f8fafc;
+    --border: #e5e7eb;
+    --border-strong: #d1d5db;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-tertiary: #94a3b8;
+  }
+  body { font-family: 'Inter', system-ui, sans-serif; color: var(--text-primary); }
+  .btn-primary {
+    background: var(--accent); color: white; padding: 10px 18px;
+    border-radius: 8px; font-weight: 500; transition: background .15s, transform .05s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:active { transform: translateY(1px); }
   .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
-  .btn-ghost { padding: 10px 18px; border-radius: 8px; font-weight: 500; color: #374151; }
+  .btn-ghost {
+    padding: 10px 18px; border-radius: 8px; font-weight: 500; color: #374151;
+    display: inline-flex; align-items: center; gap: 6px; transition: background .15s;
+  }
   .btn-ghost:hover { background: #f3f4f6; }
-  .card { background: white; border-radius: 12px; border: 1px solid #e5e7eb; }
-  .step-dot { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+  .card {
+    background: var(--surface); border-radius: 14px;
+    border: 1px solid var(--border);
+  }
+  .card-elev {
+    background: var(--surface); border-radius: 14px;
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.03);
+  }
+  /* Stepper */
+  .step-dot { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; flex-shrink: 0; }
   .step-dot.done { background: #10b981; color: white; }
   .step-dot.active { background: var(--accent); color: white; }
   .step-dot.pending { background: #e5e7eb; color: #6b7280; }
-  .drop-zone { border: 2px dashed #d1d5db; transition: all .15s; }
+  /* Dropzone */
+  .drop-zone { border: 2px dashed var(--border-strong); transition: all .15s; background: var(--surface-muted); }
   .drop-zone.dragover { border-color: var(--accent); background: #eff6ff; }
-  .section-chip { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; cursor: pointer; transition: all .15s; }
-  .section-chip:hover { border-color: #9ca3af; }
+  /* Section chips */
+  .section-chip { border: 1.5px solid var(--border); border-radius: 10px; padding: 12px 14px; cursor: pointer; transition: all .15s; background: white; }
+  .section-chip:hover { border-color: var(--border-strong); }
   .section-chip.selected { border-color: var(--accent); background: #eff6ff; }
   .section-chip.required { background: #f9fafb; cursor: not-allowed; }
+  /* Tiles for metrics */
+  .metric-tile { background: var(--surface-muted); border-radius: 10px; padding: 14px 16px; }
+  .metric-tile .label { font-size: 12px; color: var(--text-secondary); font-weight: 500; letter-spacing: 0.01em; text-transform: uppercase; }
+  .metric-tile .value { font-size: 20px; font-weight: 600; margin-top: 6px; color: var(--text-primary); letter-spacing: -0.01em; }
+  /* Section header (within a card) */
+  .section-header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .section-header .icon-bubble { width: 28px; height: 28px; border-radius: 8px; background: var(--surface-muted); display: inline-flex; align-items: center; justify-content: center; }
+  .section-header h3 { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0; }
+  /* Top performer cards */
+  .top-card { background: var(--surface-muted); border-radius: 12px; padding: 16px; }
+  .top-card h4 { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin: 0 0 12px; letter-spacing: 0.05em; text-transform: uppercase; }
+  .top-card ol { margin: 0; padding: 0; list-style: none; }
+  .top-card ol li { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; font-size: 14px; }
+  .top-card ol li:not(:last-child) { border-bottom: 1px solid var(--border); }
+  .top-card ol li .name { color: var(--text-primary); font-weight: 500; }
+  .top-card ol li .val { color: var(--text-secondary); font-variant-numeric: tabular-nums; font-weight: 500; }
+  /* Disclosure */
+  .disclosure { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .disclosure summary { padding: 14px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--text-primary); user-select: none; list-style: none; transition: background .15s; }
+  .disclosure summary::-webkit-details-marker { display: none; }
+  .disclosure summary:hover { background: var(--surface-muted); }
+  .disclosure summary .chev { transition: transform .2s; color: var(--text-secondary); }
+  .disclosure[open] summary .chev { transform: rotate(90deg); }
+  .disclosure[open] summary { border-bottom: 1px solid var(--border); background: var(--surface-muted); }
+  .disclosure .body { padding: 18px 20px; background: white; }
+  /* Validation report formatting */
+  .vr h4 { font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 0 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); letter-spacing: 0.02em; text-transform: uppercase; }
+  .vr-section { margin-bottom: 1.25rem; }
+  .vr-section:last-child { margin-bottom: 0; }
+  .vr-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; gap: 16px; }
+  .vr-row .k { color: var(--text-secondary); }
+  .vr-row .v { color: var(--text-primary); font-weight: 500; text-align: right; }
+  .vr-list { margin: 0; padding-left: 18px; font-size: 14px; color: var(--text-primary); }
+  .vr-list li { padding: 3px 0; }
+  /* Animations */
   @keyframes spin { to { transform: rotate(360deg); } }
   .spinner { animation: spin 1s linear infinite; }
 </style>
@@ -34,13 +100,17 @@
 
 <nav class="bg-white border-b border-gray-200">
   <div class="max-w-5xl mx-auto px-6 py-3 flex items-center justify-between">
-    <a href="/app" class="font-semibold text-gray-900">PCA Generator</a>
+    <a href="/app" class="flex items-center gap-3">
+      <img src="/static/mobkoi-logo.webp" alt="Mobkoi" class="h-7 w-auto" />
+      <span class="text-gray-300 text-xl font-light">|</span>
+      <span class="font-semibold text-gray-900">PCA Generator</span>
+    </a>
     {% if user %}
-    <div class="flex items-center gap-4">
+    <div class="flex items-center gap-5">
       <a href="/app" class="text-sm text-gray-600 hover:text-gray-900">New PCA</a>
       <a href="/history" class="text-sm text-gray-600 hover:text-gray-900">History</a>
-      <div class="flex items-center gap-2 ml-2">
-        {% if user.picture %}<img src="{{ user.picture }}" class="w-7 h-7 rounded-full" />{% endif %}
+      <div class="flex items-center gap-2 ml-2 pl-5 border-l border-gray-200">
+        {% if user.picture %}<img src="{{ user.picture }}" class="w-7 h-7 rounded-full" alt="" />{% endif %}
         <span class="text-sm text-gray-700">{{ user.name or user.email }}</span>
       </div>
       <a href="/logout" class="text-sm text-gray-500 hover:text-gray-700">Sign out</a>
