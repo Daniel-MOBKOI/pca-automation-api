@@ -31,7 +31,6 @@
 
 <!-- STEP 2: Review -->
 <section id="step-2" class="card-elev p-8 hidden">
-  <!-- Header -->
   <div class="flex items-center gap-3 mb-1">
     <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
       <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
@@ -40,38 +39,34 @@
   </div>
   <p id="review-filename" class="text-sm text-gray-500 ml-11 mb-6"></p>
 
-  <!-- Campaign Overview -->
   <div class="mb-5">
     <h3 class="section-title">Campaign Overview</h3>
     <div id="campaign-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
   </div>
 
-  <!-- Performance Metrics -->
   <div class="mb-5">
     <h3 class="section-title">Performance Metrics</h3>
     <div id="performance-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
   </div>
 
-  <!-- Delivery & Spend -->
   <div class="mb-5">
     <h3 class="section-title">Delivery &amp; Spend</h3>
     <div id="delivery-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
   </div>
 
-  <!-- Top Performing Titles -->
   <div class="mb-6" id="top-performers-section">
     <h3 class="section-title">Top Performing Titles</h3>
-    <div id="top-performers" class="top-grid"></div>
+    <div class="top-wrap">
+      <div id="top-performers" class="top-grid"></div>
+    </div>
   </div>
 
-  <!-- Status banner (now below the bento grid, per user preference) -->
   <div id="review-warnings" class="mb-6"></div>
 
-  <!-- Full validation report -->
   <details class="disclosure mb-6">
     <summary>
       <svg class="chev w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
-      <span>See full validation report</span>
+      <span>See Full Validation Report</span>
     </summary>
     <div class="body">
       <div id="review-formatted" class="vr"></div>
@@ -81,7 +76,7 @@
   <div class="flex justify-between">
     <button class="btn-ghost" onclick="goToStep(1)">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
-      Start over
+      Start Over
     </button>
     <button class="btn-primary" onclick="goToStep(3)">
       Continue
@@ -92,35 +87,37 @@
 
 <!-- STEP 3: Customise -->
 <section id="step-3" class="card-elev p-8 hidden">
-  <h2 class="text-xl font-semibold">A few choices to make</h2>
+  <h2 class="text-xl font-semibold">A Few Choices to Make</h2>
   <p class="text-sm text-gray-500 mt-1 mb-6">Defaults are sensible — skip what you don't need.</p>
 
+  <!-- Output type: order is One-pager / Full Deck / Both. Default One-pager. -->
   <div class="mb-8">
-    <div class="text-sm font-medium mb-3">What should I build?</div>
+    <div class="text-sm font-medium mb-3">What Should I Build?</div>
     <div class="grid grid-cols-3 gap-3">
-      <label class="section-chip text-center" data-output="one_pager">
-        <input type="radio" name="output_type" value="one_pager" class="hidden" />
+      <label class="output-chip selected" data-output="one_pager">
+        <input type="radio" name="output_type" value="one_pager" class="hidden" checked />
         <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        <div class="text-sm mt-2">One-pager</div>
+        <div class="text-sm mt-2 font-medium">One-pager</div>
       </label>
-      <label class="section-chip text-center selected" data-output="both">
-        <input type="radio" name="output_type" value="both" class="hidden" checked />
-        <svg class="w-7 h-7 mx-auto text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
-        <div class="text-sm mt-2 font-medium">Both</div>
-      </label>
-      <label class="section-chip text-center" data-output="slide_deck">
+      <label class="output-chip" data-output="slide_deck">
         <input type="radio" name="output_type" value="slide_deck" class="hidden" />
         <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
-        <div class="text-sm mt-2">Full deck</div>
+        <div class="text-sm mt-2">Full Deck</div>
+      </label>
+      <label class="output-chip" data-output="both">
+        <input type="radio" name="output_type" value="both" class="hidden" />
+        <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
+        <div class="text-sm mt-2">Both</div>
       </label>
     </div>
   </div>
 
+  <!-- One-pager sections -->
   <div class="mb-8">
     <div class="flex items-center justify-between mb-3">
-      <div class="text-sm font-medium">Which sections to include</div>
+      <div class="text-sm font-medium" id="onepager-sections-label">Which Sections to Include</div>
       <div class="flex gap-2 text-xs">
-        <button class="text-blue-600 hover:underline" onclick="selectAllSections()">Select all</button>
+        <button class="text-blue-600 hover:underline" onclick="selectAllSections()">Select All</button>
         <span class="text-gray-300">|</span>
         <button class="text-blue-600 hover:underline" onclick="selectNoSections()">Clear</button>
       </div>
@@ -128,30 +125,53 @@
     <div id="sections-grid" class="grid grid-cols-2 gap-2"></div>
   </div>
 
+  <!-- Exec summary with regenerate button -->
   <div class="mb-6">
     <div class="flex items-center justify-between mb-2">
-      <div class="text-sm font-medium">Executive summary</div>
-      <button class="text-xs text-blue-600 hover:underline" onclick="resetExecSummary()">Reset to default</button>
+      <div class="text-sm font-medium">Executive Summary</div>
+      <div class="flex gap-3 items-center">
+        <button class="text-xs text-blue-600 hover:underline" onclick="regenerateExecSummary()">
+          <svg class="inline w-3.5 h-3.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          Regenerate
+        </button>
+      </div>
     </div>
     <textarea id="exec-summary-input" rows="5" maxlength="550"
       class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
       placeholder="Pre-filled from your EOC. Edit if you'd like."></textarea>
-    <div class="text-xs text-gray-500 mt-1"><span id="summary-count">0</span> / 550 characters</div>
+    <div class="text-xs text-gray-500 mt-1">
+      <span id="summary-count">0</span> / 550 characters
+      <span id="summary-variant-hint" class="ml-2 text-gray-400"></span>
+    </div>
   </div>
 
-  <details class="bg-gray-50 rounded-lg p-4">
-    <summary class="cursor-pointer text-sm font-medium text-gray-700">Advanced options</summary>
+  <!-- Advanced options: only visible when output includes a deck -->
+  <details id="advanced-options" class="bg-gray-50 rounded-lg p-4 hidden">
+    <summary class="cursor-pointer text-sm font-medium text-gray-700">Advanced Options</summary>
     <div class="mt-4 space-y-3">
       <div>
-        <label class="text-xs text-gray-600">Deck mode (when building slide deck)</label>
+        <label class="text-xs text-gray-600">Deck mode</label>
         <select id="deck-mode" class="block w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm">
-          <option value="matching" selected>Matching (uses same sections as one-pager)</option>
+          <option value="matching" selected>Matching (uses same sections as One-pager)</option>
           <option value="full">Full (all available slides)</option>
           <option value="custom">Custom (pick deck sections separately)</option>
         </select>
       </div>
     </div>
   </details>
+
+  <!-- Custom deck section picker: only visible when deck mode is custom -->
+  <div id="custom-deck-section" class="mb-8 hidden mt-4">
+    <div class="flex items-center justify-between mb-3">
+      <div class="text-sm font-medium">Custom Slide Deck Sections</div>
+      <div class="flex gap-2 text-xs">
+        <button class="text-blue-600 hover:underline" onclick="selectAllDeckSections()">Select All</button>
+        <span class="text-gray-300">|</span>
+        <button class="text-blue-600 hover:underline" onclick="selectNoDeckSections()">Clear</button>
+      </div>
+    </div>
+    <div id="deck-sections-grid" class="grid grid-cols-2 gap-2"></div>
+  </div>
 
   <div class="mt-8 flex justify-between">
     <button class="btn-ghost" onclick="goToStep(2)">
@@ -167,7 +187,7 @@
 
 <!-- STEP 4: Generating -->
 <section id="step-4" class="card-elev p-10 hidden">
-  <h2 class="text-xl font-semibold mb-1">Building your PCA</h2>
+  <h2 class="text-xl font-semibold mb-1">Building Your PCA</h2>
   <p class="text-sm text-gray-500 mb-6">This usually takes around 30 seconds.</p>
   <div id="progress-list" class="space-y-2"></div>
 </section>
@@ -177,14 +197,14 @@
   <div class="w-14 h-14 mx-auto bg-green-100 rounded-full flex items-center justify-center">
     <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
   </div>
-  <h2 class="mt-4 text-2xl font-semibold">Your PCA is ready</h2>
+  <h2 class="mt-4 text-2xl font-semibold">Your PCA Is Ready</h2>
   <p id="done-meta" class="mt-1 text-gray-500"></p>
 
   <div id="done-downloads" class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl mx-auto"></div>
 
   <div class="mt-8 flex justify-center gap-3">
-    <a href="/history" class="btn-ghost">View history</a>
-    <button class="btn-primary" onclick="resetAll()">Build another</button>
+    <a href="/history" class="btn-ghost">View History</a>
+    <button class="btn-primary" onclick="resetAll()">Build Another</button>
   </div>
 </section>
 
@@ -195,12 +215,21 @@ const state = {
   file: null,
   validation: null,
   sections: [],
-  outputType: 'both',
+  outputType: 'one_pager',
   selectedSections: new Set(),
+  selectedDeckSections: new Set(),
   deckMode: 'matching',
   execSummary: '',
-  defaultExecSummary: '',
+  // Exec summary variant cycling state:
+  //   variantIndex cycles 0..N-1 as the user clicks Regenerate.
+  //   Once all variants have been shown, the cycle restarts with light variations.
+  execVariantIndex: 0,
+  execVariantCount: 3,
+  execUserEdited: false,
 };
+
+// Default: only Title Performance selected (was: all sections)
+const DEFAULT_SELECTED_SECTIONS = new Set(['TITLE_PERFORMANCE']);
 
 // ----- Step navigation -----
 function goToStep(n) {
@@ -219,9 +248,13 @@ function goToStep(n) {
 function resetAll() {
   state.file = null;
   state.validation = null;
-  state.selectedSections.clear();
+  state.selectedSections = new Set();
+  state.selectedDeckSections = new Set();
   state.execSummary = '';
-  state.defaultExecSummary = '';
+  state.execVariantIndex = 0;
+  state.execUserEdited = false;
+  state.outputType = 'one_pager';
+  state.deckMode = 'matching';
   document.getElementById('file-input').value = '';
   document.getElementById('exec-summary-input').value = '';
   goToStep(1);
@@ -259,8 +292,10 @@ async function handleFile(file) {
       throw new Error(err.detail || 'Validation failed');
     }
     state.validation = await res.json();
-    state.defaultExecSummary = state.validation.default_exec_summary || '';
-    state.execSummary = state.defaultExecSummary;
+    // Generate the first exec summary variant from validated data
+    state.execVariantIndex = 0;
+    state.execUserEdited = false;
+    state.execSummary = buildExecSummary(state.validation, 0);
     renderReview();
     await loadSections();
     goToStep(2);
@@ -269,13 +304,132 @@ async function handleFile(file) {
   }
 }
 
+// ----- Exec summary generation -----
+//
+// Three variant styles modelled on the ChatGPT-quality summaries the user
+// shared. Each takes the validated EOC fields and weaves them into a
+// natural-sounding paragraph in a slightly different voice:
+//
+//   0 — Performance-led: leads with outcomes and metrics
+//   1 — Brand-led:       leads with brand/audience context, weaves in numbers
+//   2 — Concise:         tighter, single-paragraph, fewer adjectives
+//
+// Clicking Regenerate cycles 0 → 1 → 2 → 0 → 1 → 2 → ... If the user has
+// edited the textarea, Regenerate replaces their edit (consistent with
+// the user's earlier note that the textbox is fully editable).
+
+function buildExecSummary(validation, variantIndex) {
+  const i = validation && validation.summary_inputs ? validation.summary_inputs : {};
+  const variant = variantIndex % state.execVariantCount;
+
+  const campaign  = i.campaign_name || 'The campaign';
+  const markets   = i.markets || '';
+  const imps      = i.delivered_impressions || '';
+  const ctr       = i.ctr || '';
+  const er        = i.engagement_rate || '';
+  const vcr       = i.vcr || '';
+  const osr       = i.on_screen_rate || '';
+  const topCtr    = (i.top_ctr && i.top_ctr[0]) ? i.top_ctr[0].name : '';
+  const topEr     = (i.top_engagement_rate && i.top_engagement_rate[0]) ? i.top_engagement_rate[0].name : '';
+  const topVcr    = (i.top_vcr && i.top_vcr[0]) ? i.top_vcr[0].name : '';
+
+  // Helper: format impressions naturally (1,175,313 → "over 1.17M")
+  const impsNice = formatImpressions(imps);
+
+  // Helper: market phrasing
+  const marketPhrase = markets
+    ? `across ${markets}`
+    : 'across the booked market';
+
+  // Pick a closing publisher highlight, preferring engagement → CTR → VCR
+  const winner = topEr || topCtr || topVcr || '';
+
+  if (variant === 0) {
+    // Performance-led
+    return (
+      `${campaign} delivered strong audience engagement ${marketPhrase}, ` +
+      `generating ${impsNice} and exceeding booked delivery. ` +
+      `The campaign achieved ${pct(ctr, 'CTR')}${joinMetrics([
+        pct(er, 'engagement'), pct(vcr, 'VCR'), pct(osr, 'on-screen rate'),
+      ])}. ` +
+      (winner
+        ? `${winner} led performance across premium environments.`
+        : `Performance was led by premium publishers in market.`)
+    );
+  }
+
+  if (variant === 1) {
+    // Brand-led
+    return (
+      `${campaign} delivered strong upper-funnel performance ${marketPhrase}, ` +
+      `generating ${impsNice} through premium publishing environments. ` +
+      (topCtr && topEr && topCtr !== topEr
+        ? `${topCtr} and ${topEr} emerged as standout performers across CTR and engagement metrics, `
+        : (winner ? `${winner} stood out across the campaign, ` : ``)) +
+      (vcr
+        ? `while a ${vcr} video completion rate reinforced strong audience attention and brand visibility.`
+        : `reinforcing strong audience attention and brand visibility.`)
+    );
+  }
+
+  // Concise
+  return (
+    `${campaign} ran ${marketPhrase} and delivered ${impsNice}, ` +
+    `with ${pct(ctr, 'CTR')}${joinMetrics([
+      pct(er, 'engagement'), pct(vcr, 'VCR'),
+    ])}. ` +
+    (winner
+      ? `${winner} led performance across the title set.`
+      : `Delivery exceeded booked plan across the title set.`)
+  );
+}
+
+// "1,175,313" → "over 1.17M"; "397,053" → "397,053"; falls back to raw on failure
+function formatImpressions(s) {
+  if (!s) return '';
+  const n = parseInt(String(s).replace(/[^\d]/g, ''), 10);
+  if (!isFinite(n) || n <= 0) return s;
+  if (n >= 1_000_000) return `over ${(n / 1_000_000).toFixed(2)}M impressions`;
+  return `${n.toLocaleString()} impressions`;
+}
+
+// "0.78%" + "CTR" → "a 0.78% CTR"; empty input → "" (so we can skip cleanly)
+function pct(value, label) {
+  if (!value) return '';
+  return `a ${value} ${label}`;
+}
+
+// Join non-empty metric phrases with commas + final "and"
+function joinMetrics(arr) {
+  const list = arr.filter(Boolean);
+  if (!list.length) return '';
+  if (list.length === 1) return `, with ${list[0]}`;
+  const last = list.pop();
+  return `, with ${list.join(', ')} and ${last}`;
+}
+
+function regenerateExecSummary() {
+  state.execVariantIndex = (state.execVariantIndex + 1) % state.execVariantCount;
+  state.execSummary = buildExecSummary(state.validation, state.execVariantIndex);
+  state.execUserEdited = false;
+  const ta = document.getElementById('exec-summary-input');
+  ta.value = state.execSummary;
+  document.getElementById('summary-count').textContent = ta.value.length;
+  updateVariantHint();
+}
+
+function updateVariantHint() {
+  const names = ['Performance-led', 'Brand-led', 'Concise'];
+  const hint = document.getElementById('summary-variant-hint');
+  if (state.execUserEdited) {
+    hint.textContent = '· edited';
+  } else {
+    hint.textContent = `· ${names[state.execVariantIndex] || ''}`;
+  }
+}
+
 // ----- Step 2: Review -----
 
-/**
- * Compact a long date range like "14 October - 02 November 2025" into
- * "14 Oct – 02 Nov 2025" purely for display. The underlying value used
- * for validation and PPT injection stays untouched in state.validation.
- */
 function compactDateRange(s) {
   if (!s || typeof s !== 'string') return s;
   const monthMap = {
@@ -286,7 +440,6 @@ function compactDateRange(s) {
   Object.keys(monthMap).forEach(full => {
     out = out.replace(new RegExp('\\b' + full + '\\b', 'g'), monthMap[full]);
   });
-  // Normalise hyphen-space-hyphen patterns to en-dash for visual cleanness
   out = out.replace(/\s+-\s+/g, ' – ');
   return out;
 }
@@ -298,7 +451,6 @@ function renderReview() {
   document.getElementById('review-filename').textContent =
     `${v.filename || 'EOC file'} · ${new Date().toLocaleString()}`;
 
-  // Campaign Overview — abbreviate live_dates for display only
   const displayInputs = Object.assign({}, inputs);
   if (displayInputs.live_dates) {
     displayInputs.live_dates = compactDateRange(displayInputs.live_dates);
@@ -308,26 +460,25 @@ function renderReview() {
     { key: 'campaign_name',   label: 'Campaign' },
     { key: 'client',          label: 'Client' },
     { key: 'markets',         label: 'Markets' },
-    { key: 'live_dates',      label: 'Live dates' },
+    { key: 'live_dates',      label: 'Live Dates' },
   ], displayInputs);
 
   renderTiles('performance-tiles', [
     { key: 'ctr',                 label: 'CTR' },
-    { key: 'engagement_rate',     label: 'Engagement rate' },
+    { key: 'engagement_rate',     label: 'Engagement Rate' },
     { key: 'vcr',                 label: 'VCR' },
-    { key: 'on_screen_rate',      label: 'On-screen rate' },
+    { key: 'on_screen_rate',      label: 'On-Screen Rate' },
   ], displayInputs);
 
   renderTiles('delivery-tiles', [
     { key: 'delivered_impressions', label: 'Impressions' },
     { key: 'budget',                label: 'Budget' },
     { key: 'delivery_incl_av',      label: 'Delivery (incl. AV)' },
-    { key: 'added_value_worth',     label: 'Added value' },
+    { key: 'added_value_worth',     label: 'Added Value' },
   ], displayInputs);
 
   renderTopPerformers(inputs);
 
-  // Status banner (below the bento grid)
   const warnEl = document.getElementById('review-warnings');
   const populated = Object.keys(inputs).length;
   if (populated === 0) {
@@ -343,7 +494,6 @@ function renderReview() {
        </div>`;
   }
 
-  // Formatted validation report (uses raw values, not compacted)
   renderFormattedReport(v.display_validation_text || '', inputs);
 }
 
@@ -365,7 +515,7 @@ function renderTiles(containerId, fields, inputs) {
 function renderTopPerformers(inputs) {
   const groups = [
     { key: 'top_ctr',             title: 'CTR' },
-    { key: 'top_engagement_rate', title: 'Engagement rate' },
+    { key: 'top_engagement_rate', title: 'Engagement Rate' },
     { key: 'top_vcr',             title: 'VCR' },
   ];
   const container = document.getElementById('top-performers');
@@ -392,14 +542,6 @@ function renderTopPerformers(inputs) {
   document.getElementById('top-performers-section').classList.toggle('hidden', !anyShown);
 }
 
-/**
- * Parse the backend's markdown-like display_validation_text into structured
- * sections, then render them with clean styling.
- *
- * Special handling:
- *   - "Creative Formats" section: render each item as plain text, no bullets
- *   - "Top Performing Titles" section: render as 3 columns (CTR/ER/VCR), no bullets
- */
 function renderFormattedReport(markdown, inputs) {
   if (!markdown) {
     document.getElementById('review-formatted').innerHTML =
@@ -449,12 +591,10 @@ function renderFormattedReport(markdown, inputs) {
   const html = sections.map(s => {
     const titleLower = s.title.trim().toLowerCase();
 
-    // Special case 1: Top Performing Titles → 3-column grid
     if (titleLower === 'top performing titles') {
       return renderTopPerformersInReport(s);
     }
 
-    // Special case 2: Creative Formats → plain inline text (no empty bullets)
     if (titleLower === 'creative formats') {
       const items = s.blocks.flatMap(b => b.items)
         .map(i => typeof i === 'string' ? i : `${i.k}: ${i.v}`);
@@ -464,7 +604,6 @@ function renderFormattedReport(markdown, inputs) {
       return `<div class="vr-section"><h4>${escapeHtml(s.title)}</h4>${body}</div>`;
     }
 
-    // Default: key/value rows + optional bulleted lists
     const body = s.blocks.map(b => {
       const subTitle = b.subHeader
         ? `<div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-3 mb-1">${escapeHtml(b.subHeader)}</div>`
@@ -486,15 +625,8 @@ function renderFormattedReport(markdown, inputs) {
     `<pre class="text-xs whitespace-pre-wrap text-gray-600">${escapeHtml(markdown)}</pre>`;
 }
 
-/**
- * Render the "Top Performing Titles" section as a 3-column grid.
- * Columns are derived from sub-headers (CTR / ER / VCR), each column
- * is a stacked list of "Name – Value" rows, left-aligned, no bullets.
- */
 function renderTopPerformersInReport(section) {
-  // Group items by subHeader. Walk through blocks in order so we preserve
-  // the column ordering as it appears in the source.
-  const cols = []; // [{title, rows: [...]}]
+  const cols = [];
   let currentCol = null;
 
   section.blocks.forEach(b => {
@@ -549,15 +681,36 @@ async function loadSections() {
   const res = await fetch('/api/sections');
   const data = await res.json();
   state.sections = data.sections || [];
-  state.selectedSections = new Set(state.sections.map(s => s.section_id));
 
+  // Default selection: only Title Performance (plus any required sections)
+  state.selectedSections = new Set();
+  state.sections.forEach(s => {
+    if (s.required || DEFAULT_SELECTED_SECTIONS.has(s.section_id)) {
+      state.selectedSections.add(s.section_id);
+    }
+  });
+
+  renderOnePagerSections();
+  renderDeckSections();
+
+  // Pre-fill exec summary
+  const ta = document.getElementById('exec-summary-input');
+  ta.value = state.execSummary;
+  document.getElementById('summary-count').textContent = ta.value.length;
+  updateVariantHint();
+
+  // Initialise the conditional UI (advanced options, custom deck picker)
+  updateConditionalUI();
+}
+
+function renderOnePagerSections() {
   const grid = document.getElementById('sections-grid');
   grid.innerHTML = '';
   state.sections.forEach(s => {
     if (s.section_id === 'TITLE_OVERVIEW') return;
     const isSel = state.selectedSections.has(s.section_id);
     grid.insertAdjacentHTML('beforeend', `
-      <label class="section-chip flex items-center gap-2 ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''}" data-section="${escapeHtml(s.section_id)}">
+      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''}" data-section="${escapeHtml(s.section_id)}">
         <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
         <span class="text-sm">${escapeHtml(s.label)}${s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : ''}</span>
       </label>
@@ -577,13 +730,45 @@ async function loadSections() {
         el.classList.add('selected');
         cb.checked = true;
       }
+      // If deck mode is custom, keep deck pre-fill in sync until user touches it
       e.preventDefault();
     });
   });
+}
 
-  const ta = document.getElementById('exec-summary-input');
-  ta.value = state.execSummary;
-  document.getElementById('summary-count').textContent = ta.value.length;
+function renderDeckSections() {
+  // Pre-fill deck sections with current one-pager selection
+  state.selectedDeckSections = new Set(state.selectedSections);
+
+  const grid = document.getElementById('deck-sections-grid');
+  grid.innerHTML = '';
+  state.sections.forEach(s => {
+    if (s.section_id === 'TITLE_OVERVIEW') return;
+    const isSel = state.selectedDeckSections.has(s.section_id);
+    grid.insertAdjacentHTML('beforeend', `
+      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''}" data-deck-section="${escapeHtml(s.section_id)}">
+        <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
+        <span class="text-sm">${escapeHtml(s.label)}${s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : ''}</span>
+      </label>
+    `);
+  });
+  grid.querySelectorAll('label[data-deck-section]').forEach(el => {
+    el.addEventListener('click', e => {
+      const id = el.dataset.deckSection;
+      const cb = el.querySelector('input');
+      if (cb.disabled) return;
+      if (state.selectedDeckSections.has(id)) {
+        state.selectedDeckSections.delete(id);
+        el.classList.remove('selected');
+        cb.checked = false;
+      } else {
+        state.selectedDeckSections.add(id);
+        el.classList.add('selected');
+        cb.checked = true;
+      }
+      e.preventDefault();
+    });
+  });
 }
 
 function selectAllSections() {
@@ -606,42 +791,80 @@ function selectNoSections() {
     cb.checked = false;
   });
 }
-
-function resetExecSummary() {
-  state.execSummary = state.defaultExecSummary;
-  const ta = document.getElementById('exec-summary-input');
-  ta.value = state.execSummary;
-  document.getElementById('summary-count').textContent = ta.value.length;
+function selectAllDeckSections() {
+  state.selectedDeckSections = new Set(state.sections.map(s => s.section_id));
+  document.querySelectorAll('#deck-sections-grid label').forEach(el => {
+    el.classList.add('selected');
+    const cb = el.querySelector('input');
+    if (!cb.disabled) cb.checked = true;
+  });
+}
+function selectNoDeckSections() {
+  state.selectedDeckSections.clear();
+  document.querySelectorAll('#deck-sections-grid label').forEach(el => {
+    const cb = el.querySelector('input');
+    if (cb.disabled) {
+      state.selectedDeckSections.add(el.dataset.deckSection);
+      return;
+    }
+    el.classList.remove('selected');
+    cb.checked = false;
+  });
 }
 
+// Output type selection (One-pager / Full Deck / Both)
 document.querySelectorAll('[data-output]').forEach(el => {
   el.addEventListener('click', () => {
     document.querySelectorAll('[data-output]').forEach(x => x.classList.remove('selected'));
     el.classList.add('selected');
     state.outputType = el.dataset.output;
-    el.querySelector('input').checked = true;
+    const input = el.querySelector('input');
+    if (input) input.checked = true;
+    updateConditionalUI();
   });
 });
 
+// Exec summary edits
 document.getElementById('exec-summary-input').addEventListener('input', e => {
   state.execSummary = e.target.value;
+  state.execUserEdited = true;
   document.getElementById('summary-count').textContent = e.target.value.length;
+  updateVariantHint();
 });
 
+// Deck mode change
 document.getElementById('deck-mode').addEventListener('change', e => {
   state.deckMode = e.target.value;
+  updateConditionalUI();
 });
+
+// Show/hide advanced options + custom deck section picker based on choices
+function updateConditionalUI() {
+  const showAdvanced = state.outputType === 'slide_deck' || state.outputType === 'both';
+  document.getElementById('advanced-options').classList.toggle('hidden', !showAdvanced);
+
+  // Custom deck picker only shows when advanced is visible AND deck mode = custom
+  const showCustomDeck = showAdvanced && state.deckMode === 'custom';
+  document.getElementById('custom-deck-section').classList.toggle('hidden', !showCustomDeck);
+
+  // When opening custom deck for the first time, sync the pre-fill from one-pager
+  if (showCustomDeck) {
+    // Refresh from current one-pager selection each time the picker becomes visible,
+    // so users always see "matches what you picked above" as a sensible starting point.
+    renderDeckSections();
+  }
+}
 
 // ----- Step 4 + 5: Generate -----
 async function startGeneration() {
   goToStep(4);
   const list = document.getElementById('progress-list');
   const steps = [
-    'Reading EOC data',
-    'Validating campaign data',
-    state.outputType === 'slide_deck' ? null : 'Populating one-pager',
-    state.outputType === 'one_pager' ? null : 'Building slide deck',
-    'Final polish',
+    'Reading EOC Data',
+    'Validating Campaign Data',
+    state.outputType === 'slide_deck' ? null : 'Populating One-pager',
+    state.outputType === 'one_pager' ? null : 'Building Slide Deck',
+    'Final Polish',
   ].filter(Boolean);
 
   list.innerHTML = steps.map((s, i) =>
@@ -661,6 +884,7 @@ async function startGeneration() {
   fd.append('output_type', state.outputType);
   fd.append('selected_sections', JSON.stringify([...state.selectedSections]));
   fd.append('deck_mode', state.deckMode);
+  fd.append('custom_deck_sections', JSON.stringify([...state.selectedDeckSections]));
   fd.append('exec_summary', state.execSummary || '');
 
   try {
@@ -711,7 +935,7 @@ function showDone(data) {
           <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
         </div>
         <div>
-          <div class="font-medium">Slide deck</div>
+          <div class="font-medium">Slide Deck</div>
           <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
         </div>
       </a>`);
