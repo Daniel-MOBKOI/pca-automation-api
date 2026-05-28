@@ -2870,3 +2870,7 @@ async def mcp_post_endpoint(request: Dict[str, Any]):
         "id": req_id,
         "error": {"code": -32601, "message": f"Method not found: {method}"}
     }
+
+# ===== Web app routes =====
+from web_routes import register_web_routes
+register_web_routes(app)
