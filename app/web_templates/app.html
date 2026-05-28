@@ -39,13 +39,22 @@
   </div>
   <p id="review-filename" class="text-sm text-gray-500 mb-6"></p>
 
+  <!-- Headline tiles -->
   <div id="review-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"></div>
 
+  <!-- Performance metrics -->
+  <div class="mb-6">
+    <div class="text-sm font-medium text-gray-700 mb-3">Performance summary</div>
+    <div id="review-metrics" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+  </div>
+
+  <!-- Warnings / OK status -->
   <div id="review-warnings" class="space-y-2 mb-6"></div>
 
+  <!-- Full validation preview -->
   <details class="mt-4">
-    <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-900">See all validated data</summary>
-    <pre id="review-raw" class="mt-3 p-4 bg-gray-50 rounded text-xs overflow-x-auto"></pre>
+    <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-900">See full validation report</summary>
+    <pre id="review-raw" class="mt-3 p-4 bg-gray-50 rounded text-xs overflow-x-auto whitespace-pre-wrap"></pre>
   </details>
 
   <div class="mt-8 flex justify-between">
@@ -96,10 +105,13 @@
 
   <!-- Exec summary -->
   <div class="mb-6">
-    <div class="text-sm font-medium mb-2">Executive summary</div>
-    <textarea id="exec-summary-input" rows="4" maxlength="550"
+    <div class="flex items-center justify-between mb-2">
+      <div class="text-sm font-medium">Executive summary</div>
+      <button class="text-xs text-blue-600 hover:underline" onclick="resetExecSummary()">Reset to default</button>
+    </div>
+    <textarea id="exec-summary-input" rows="5" maxlength="550"
       class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-      placeholder="Write your own, or leave blank to use the default."></textarea>
+      placeholder="Pre-filled from your EOC. Edit if you'd like."></textarea>
     <div class="text-xs text-gray-500 mt-1"><span id="summary-count">0</span> / 550 characters</div>
   </div>
 
@@ -158,6 +170,7 @@ const state = {
   selectedSections: new Set(),
   deckMode: 'matching',
   execSummary: '',
+  defaultExecSummary: '',
 };
 
 // ----- Step navigation -----
@@ -178,6 +191,8 @@ function resetAll() {
   state.file = null;
   state.validation = null;
   state.selectedSections.clear();
+  state.execSummary = '';
+  state.defaultExecSummary = '';
   document.getElementById('file-input').value = '';
   document.getElementById('exec-summary-input').value = '';
   goToStep(1);
@@ -215,6 +230,8 @@ async function handleFile(file) {
       throw new Error(err.detail || 'Validation failed');
     }
     state.validation = await res.json();
+    state.defaultExecSummary = state.validation.default_exec_summary || '';
+    state.execSummary = state.defaultExecSummary;
     renderReview();
     await loadSections();
     goToStep(2);
@@ -224,53 +241,90 @@ async function handleFile(file) {
 }
 
 // ----- Step 2: Review -----
+//
+// Backend returns:
+//   filename, status, app_version
+//   display_validation_text      (markdown summary)
+//   default_exec_summary         (pre-written GPT-style summary)
+//   summary_inputs               (the actual mapped campaign data)
+//
 function renderReview() {
   const v = state.validation;
+  const inputs = v.summary_inputs || {};
+
   document.getElementById('review-filename').textContent =
     `${v.filename || 'EOC file'} · ${new Date().toLocaleString()}`;
 
-  const display = v.display_values || {};
+  // Headline tiles - identity + dates
+  const headlineFields = [
+    { key: 'campaign_name', label: 'Campaign' },
+    { key: 'client',        label: 'Client' },
+    { key: 'markets',       label: 'Markets' },
+    { key: 'live_dates',    label: 'Live dates' },
+  ];
   const tiles = document.getElementById('review-tiles');
   tiles.innerHTML = '';
-  const prioritized = ['CAMPAIGN_NAME', 'BRAND_NAME', 'FLIGHT_DATES', 'TOTAL_IMPRESSIONS', 'CTR', 'MARKETS'];
-  let count = 0;
-  for (const key of prioritized) {
-    if (display[key] && count < 4) {
+  headlineFields.forEach(f => {
+    const val = inputs[f.key];
+    if (val) {
       tiles.insertAdjacentHTML('beforeend',
-        `<div class="bg-gray-50 rounded-lg p-3"><div class="text-xs text-gray-500">${key.replace(/_/g, ' ')}</div><div class="text-sm font-medium mt-1 truncate">${display[key]}</div></div>`);
-      count++;
+        `<div class="bg-gray-50 rounded-lg p-3">
+           <div class="text-xs text-gray-500">${f.label}</div>
+           <div class="text-sm font-medium mt-1 break-words">${escapeHtml(val)}</div>
+         </div>`);
     }
-  }
-  // Fill any remainder with whatever else is on display
-  if (count < 4) {
-    for (const [k, val] of Object.entries(display)) {
-      if (count >= 4) break;
-      if (prioritized.includes(k)) continue;
-      tiles.insertAdjacentHTML('beforeend',
-        `<div class="bg-gray-50 rounded-lg p-3"><div class="text-xs text-gray-500">${k.replace(/_/g, ' ')}</div><div class="text-sm font-medium mt-1 truncate">${val}</div></div>`);
-      count++;
-    }
-  }
+  });
 
-  // Warnings
+  // Performance metrics
+  const metricFields = [
+    { key: 'delivered_impressions', label: 'Impressions' },
+    { key: 'ctr',                   label: 'CTR' },
+    { key: 'engagement_rate',       label: 'Engagement rate' },
+    { key: 'vcr',                   label: 'VCR' },
+    { key: 'on_screen_rate',        label: 'On-screen rate' },
+    { key: 'delivery_incl_av',      label: 'Delivery (incl. AV)' },
+    { key: 'budget',                label: 'Budget' },
+    { key: 'added_value_worth',     label: 'Added value' },
+  ];
+  const metrics = document.getElementById('review-metrics');
+  metrics.innerHTML = '';
+  metricFields.forEach(f => {
+    const val = inputs[f.key];
+    if (val) {
+      metrics.insertAdjacentHTML('beforeend',
+        `<div class="bg-gray-50 rounded-lg p-3">
+           <div class="text-xs text-gray-500">${f.label}</div>
+           <div class="text-sm font-medium mt-1">${escapeHtml(val)}</div>
+         </div>`);
+    }
+  });
+
+  // Warnings / OK status. Backend returns no explicit validation field in
+  // current shape, but a 200 + populated summary_inputs implies success.
   const warnEl = document.getElementById('review-warnings');
   warnEl.innerHTML = '';
-  const warnings = (v.validation && v.validation.warnings) || [];
-  const missing = (v.validation && v.validation.missing_required) || [];
-  if (missing.length) {
+  const populated = Object.keys(inputs).length;
+  if (populated === 0) {
     warnEl.insertAdjacentHTML('beforeend',
-      `<div class="flex gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><span>⚠</span><div><strong>Missing required:</strong> ${missing.join(', ')}. We'll generate anyway with N/A placeholders.</div></div>`);
-  }
-  warnings.forEach(w => {
+      `<div class="flex gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">
+         <span>⚠</span><div>The file parsed, but no campaign fields were extracted. Check the EOC sheet structure.</div>
+       </div>`);
+  } else {
     warnEl.insertAdjacentHTML('beforeend',
-      `<div class="flex gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><span>⚠</span><div>${w}</div></div>`);
-  });
-  if (!missing.length && !warnings.length) {
-    warnEl.insertAdjacentHTML('beforeend',
-      `<div class="text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg p-3">✓ All required fields present. Ready to build.</div>`);
+      `<div class="text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg p-3">
+         ✓ ${populated} fields validated. Ready to build.
+       </div>`);
   }
 
-  document.getElementById('review-raw').textContent = JSON.stringify(v.mapped_values || {}, null, 2);
+  // Full validation report (uses backend's markdown text directly)
+  document.getElementById('review-raw').textContent =
+    v.display_validation_text || JSON.stringify(inputs, null, 2);
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
 }
 
 // ----- Step 3: Customise -----
@@ -278,14 +332,12 @@ async function loadSections() {
   const res = await fetch('/api/sections');
   const data = await res.json();
   state.sections = data.sections || [];
-
-  // Default: select all non-required by default plus required
   state.selectedSections = new Set(state.sections.map(s => s.section_id));
 
   const grid = document.getElementById('sections-grid');
   grid.innerHTML = '';
   state.sections.forEach(s => {
-    if (s.section_id === 'TITLE_OVERVIEW') return; // Always included
+    if (s.section_id === 'TITLE_OVERVIEW') return;
     const isSel = state.selectedSections.has(s.section_id);
     grid.insertAdjacentHTML('beforeend', `
       <label class="section-chip flex items-center gap-2 ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''}" data-section="${s.section_id}">
@@ -311,6 +363,11 @@ async function loadSections() {
       e.preventDefault();
     });
   });
+
+  // Pre-fill exec summary with the backend's default
+  const ta = document.getElementById('exec-summary-input');
+  ta.value = state.execSummary;
+  document.getElementById('summary-count').textContent = ta.value.length;
 }
 
 function selectAllSections() {
@@ -326,13 +383,19 @@ function selectNoSections() {
   document.querySelectorAll('#sections-grid label').forEach(el => {
     const cb = el.querySelector('input');
     if (cb.disabled) {
-      // Required ones stay
       state.selectedSections.add(el.dataset.section);
       return;
     }
     el.classList.remove('selected');
     cb.checked = false;
   });
+}
+
+function resetExecSummary() {
+  state.execSummary = state.defaultExecSummary;
+  const ta = document.getElementById('exec-summary-input');
+  ta.value = state.execSummary;
+  document.getElementById('summary-count').textContent = ta.value.length;
 }
 
 document.querySelectorAll('[data-output]').forEach(el => {
@@ -371,14 +434,12 @@ async function startGeneration() {
       <span class="text-sm">${s}</span>
     </div>`).join('');
 
-  // Animate progress visually (decoupled from real fetch since we have one request)
   for (let i = 0; i < steps.length - 1; i++) {
     setTimeout(() => markStep(i, 'active'), i * 400);
     setTimeout(() => markStep(i, 'done'), (i + 1) * 400);
   }
   setTimeout(() => markStep(steps.length - 1, 'active'), (steps.length - 1) * 400);
 
-  // The real call
   const fd = new FormData();
   fd.append('eoc_file', state.file);
   fd.append('output_type', state.outputType);
