@@ -179,7 +179,7 @@
   .vr-top-col h5 { font-size: 10px; font-weight: 600; color: var(--text-tertiary); margin: 0 0 6px; letter-spacing: 0.06em; text-transform: uppercase; }
   .vr-top-col .vr-top-row { font-size: 13px; color: var(--text-primary); padding: 3px 0; }
 
-  /* Modal (used for inline edit warning) */
+  /* Modal */
   .modal-backdrop {
     position: fixed; inset: 0; background: rgba(15, 23, 42, 0.4);
     display: flex; align-items: center; justify-content: center;
@@ -208,6 +208,12 @@
     <div class="flex items-center gap-5">
       <a href="/app" class="text-sm text-gray-600 hover:text-gray-900">New PCA</a>
       <a href="/history" class="text-sm text-gray-600 hover:text-gray-900">History</a>
+      {# Admin nav link — only rendered for admin users.
+         Backend protection on /admin is independent of this; this just
+         keeps the nav clean for non-admins. #}
+      {% if is_admin %}
+      <a href="/admin" class="text-sm text-gray-600 hover:text-gray-900">Admin</a>
+      {% endif %}
       <div class="flex items-center gap-2 ml-2 pl-5 border-l border-gray-200">
         {% if user.picture %}<img src="{{ user.picture }}" class="w-7 h-7 rounded-full" alt="" />{% endif %}
         <span class="text-sm text-gray-700">{{ user.name or user.email }}</span>
@@ -216,7 +222,6 @@
     </div>
     {% else %}
     <div>
-      {# SNAG FIX: Sign In goes directly to /login (Google OAuth) instead of bouncing through /web #}
       <a href="/login" class="text-sm text-gray-600 hover:text-gray-900">Sign in</a>
     </div>
     {% endif %}
