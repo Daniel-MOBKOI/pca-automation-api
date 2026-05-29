@@ -51,10 +51,9 @@
   </div>
 </section>
 
-<!-- STEP 3: Customise -->
+<!-- STEP 3: Customise — tab bar flush left, no gap, panel connects below -->
 <section id="step-3" class="hidden">
-  <!-- Tab bar sits directly above the panel — no gap, active tab merges in -->
-  <div id="customise-tabs" class="flex gap-0 pl-1"></div>
+  <div id="customise-tabs" class="flex gap-0"></div>
   <div id="customise-panels"></div>
   <div class="mt-6 flex justify-between">
     <button class="btn-ghost" onclick="goToStep(2)">
@@ -98,7 +97,7 @@
       </div>
       <div>
         <h3 class="font-semibold text-base">Discard your edits?</h3>
-        <p class="text-sm text-gray-600 mt-1">You've edited the executive summary. Regenerating will replace your text with a new version.</p>
+        <p class="text-sm text-gray-600 mt-1">You've edited the executive summary. Regenerating will replace your text with a new Claude-written version.</p>
       </div>
     </div>
     <div class="flex gap-2 justify-end">
@@ -114,7 +113,7 @@
   padding: 9px 20px;
   font-size: 13.5px;
   font-weight: 500;
-  border: 1px solid transparent;
+  border: 1px solid #e5e7eb;
   border-bottom: none;
   border-radius: 8px 8px 0 0;
   cursor: pointer;
@@ -124,22 +123,36 @@
   transition: background 0.15s, color 0.15s;
   position: relative;
   bottom: -1px; /* pulls tab down to merge with panel border */
+  z-index: 0;
 }
 .c-tab:hover { background: #e5e7eb; color: #374151; }
 .c-tab.active {
   background: #fff;
   color: #1d4ed8;
   border-color: #e5e7eb;
-  border-bottom-color: #fff; /* hides the panel's top border under active tab */
+  border-bottom-color: #fff;
   z-index: 1;
 }
 
+/* Panel border-top-left-radius removed when first tab is active so it connects cleanly */
+.panel-flush-tl { border-top-left-radius: 0 !important; }
+
 /* ---- Exec summary at-limit state ---- */
-.exec-ta-overlimit {
-  border-color: #ef4444 !important;
-  ring-color: #ef4444 !important;
-}
+.exec-ta-overlimit { border-color: #ef4444 !important; }
 .exec-count-overlimit { color: #ef4444; font-weight: 600; }
+
+/* ---- Exec summary spinner overlay ---- */
+.exec-ta-wrap { position: relative; }
+.exec-ta-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.75);
+  border-radius: 8px;
+  pointer-events: none;
+}
 </style>
 
 <script>
@@ -176,16 +189,9 @@ function makeEoc(file) {
 }
 
 const DEFAULT_SELECTED_SECTIONS = new Set(['TITLE_PERFORMANCE']);
-
 const SECTION_DATA_REQUIREMENTS = {
-  'MARKET_PERFORMANCE': [
-    'top_ctr_markets','top_ctr_market','top_markets_ctr','market_top_ctr',
-    'top_engagement_rate_markets','top_engagement_rate_market',
-    'top_vcr_markets','top_vcr_market',
-  ],
-  'TOP_TITLES_MARKETS': [
-    'top_ctr_markets','top_ctr_market','top_markets_ctr','market_top_ctr',
-  ],
+  'MARKET_PERFORMANCE': ['top_ctr_markets','top_ctr_market','top_markets_ctr','market_top_ctr','top_engagement_rate_markets','top_engagement_rate_market','top_vcr_markets','top_vcr_market'],
+  'TOP_TITLES_MARKETS': ['top_ctr_markets','top_ctr_market','top_markets_ctr','market_top_ctr'],
 };
 
 // ============================================================
@@ -196,25 +202,20 @@ function goToStep(n) {
   for (let i = 1; i <= 5; i++) {
     document.getElementById('step-' + i).classList.toggle('hidden', i !== n);
     const dot = document.querySelector(`.step-dot[data-step="${i}"]`);
-    dot.classList.remove('active', 'done', 'pending');
+    dot.classList.remove('active','done','pending');
     if (i < n) dot.classList.add('done');
     else if (i === n) dot.classList.add('active');
     else dot.classList.add('pending');
   }
   if (n === 2) renderAllReviews();
   if (n === 3) renderCustomiseTabs();
-  if (n === 4) document.title = '⏳ Building PCA… | PCA Generator';
-  else if (n === 5) document.title = '✅ PCA Ready | PCA Generator';
-  else document.title = 'Create PCA';
+  document.title = n === 4 ? '⏳ Building PCA… | PCA Generator' : n === 5 ? '✅ PCA Ready | PCA Generator' : 'Create PCA';
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function resetAll() {
-  state.eocs = [];
-  state.sections = [];
-  state.activeTab = 0;
-  state.generationStart = null;
-  state.regenTargetIdx = null;
+  state.eocs = []; state.sections = []; state.activeTab = 0;
+  state.generationStart = null; state.regenTargetIdx = null;
   document.getElementById('file-input').value = '';
   document.getElementById('upload-list').innerHTML = '';
   document.getElementById('upload-list').classList.add('hidden');
@@ -229,21 +230,15 @@ function resetAll() {
 // ============================================================
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('file-input');
-
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('dragover'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-dropzone.addEventListener('drop', e => {
-  e.preventDefault();
-  dropzone.classList.remove('dragover');
-  handleFiles(Array.from(e.dataTransfer.files));
-});
+dropzone.addEventListener('drop', e => { e.preventDefault(); dropzone.classList.remove('dragover'); handleFiles(Array.from(e.dataTransfer.files)); });
 fileInput.addEventListener('change', e => { handleFiles(Array.from(e.target.files)); });
 
 function showUploadError(msg) {
   const el = document.getElementById('upload-error');
-  el.textContent = msg;
-  el.classList.remove('hidden');
+  el.textContent = msg; el.classList.remove('hidden');
   setTimeout(() => el.classList.add('hidden'), 4000);
 }
 
@@ -254,10 +249,7 @@ async function handleFiles(files) {
   const existing = new Set(state.eocs.map(e => e.file.name));
   const fresh = valid.filter(f => !existing.has(f.name));
   if (!fresh.length) { showUploadError('These files are already queued.'); return; }
-  if (state.eocs.length + fresh.length > 3) {
-    showUploadError(`Max 3 files. You currently have ${state.eocs.length} queued.`);
-    return;
-  }
+  if (state.eocs.length + fresh.length > 3) { showUploadError(`Max 3 files. You currently have ${state.eocs.length} queued.`); return; }
   fresh.forEach(f => state.eocs.push(makeEoc(f)));
   renderUploadList();
   await Promise.all(fresh.map(f => validateEoc(state.eocs.find(e => e.file === f))));
@@ -275,16 +267,12 @@ function renderUploadList() {
         : eoc.status === 'error'
           ? `<svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>`
           : `<span class="w-4 h-4 text-gray-300">○</span>`;
-    const msg = eoc.status === 'error'
-      ? `<span class="text-xs text-red-500 ml-2">${escapeHtml(eoc.errorMsg)}</span>` : '';
+    const msg = eoc.status === 'error' ? `<span class="text-xs text-red-500 ml-2">${escapeHtml(eoc.errorMsg)}</span>` : '';
     return `<div class="flex items-center gap-3 px-4 py-2.5 bg-gray-50 rounded-lg text-sm">
-      ${icon}
-      <span class="flex-1 font-medium truncate">${escapeHtml(eoc.file.name)}</span>
-      ${msg}
+      ${icon}<span class="flex-1 font-medium truncate">${escapeHtml(eoc.file.name)}</span>${msg}
       <button onclick="removeEoc(${idx})" class="text-gray-400 hover:text-gray-600 ml-2 flex-shrink-0">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-      </button>
-    </div>`;
+      </button></div>`;
   }).join('');
 }
 
@@ -301,33 +289,25 @@ function checkStep1Continue() {
 }
 
 async function validateEoc(eoc) {
-  eoc.status = 'validating';
-  renderUploadList();
-  const fd = new FormData();
-  fd.append('eoc_file', eoc.file);
+  eoc.status = 'validating'; renderUploadList();
+  const fd = new FormData(); fd.append('eoc_file', eoc.file);
   try {
     const res = await fetch('/api/validate', { method: 'POST', body: fd });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Validation failed' }));
-      throw new Error(err.detail || 'Validation failed');
-    }
+    if (!res.ok) { const err = await res.json().catch(() => ({ detail: 'Validation failed' })); throw new Error(err.detail || 'Validation failed'); }
     eoc.validation = await res.json();
     eoc.status = 'ok';
-    // Use Claude summary if present, otherwise template variant 0
     eoc.execSummary = eoc.validation.claude_exec_summary || buildExecSummary(eoc.validation, 0);
-    eoc.execVariantIndex = 0;
-    eoc.execUserEdited = false;
+    eoc.execVariantIndex = 0; eoc.execUserEdited = false;
     computeNoDataSections(eoc);
     state.generationStart = Date.now();
   } catch (err) {
-    eoc.status = 'error';
-    eoc.errorMsg = err.message;
+    eoc.status = 'error'; eoc.errorMsg = err.message;
   }
   renderUploadList();
 }
 
 // ============================================================
-// STEP 2 — Review (one card per EOC, with validation report)
+// STEP 2 — Review
 // ============================================================
 function renderAllReviews() {
   const container = document.getElementById('review-cards');
@@ -335,8 +315,7 @@ function renderAllReviews() {
   state.eocs.forEach((eoc, idx) => {
     const label = eocLabel(eoc);
     const card = document.createElement('div');
-    card.className = 'card-elev p-8';
-    card.id = `review-card-${idx}`;
+    card.className = 'card-elev p-8'; card.id = `review-card-${idx}`;
     card.innerHTML = `
       <div class="flex items-center gap-3 mb-1">
         <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
@@ -345,84 +324,36 @@ function renderAllReviews() {
         <h2 class="text-lg font-semibold">${escapeHtml(label)}</h2>
       </div>
       <p class="text-sm text-gray-500 ml-11 mb-5">${escapeHtml(eoc.file.name)} · ${new Date().toLocaleString()}</p>
-
-      <div class="mb-4">
-        <h3 class="section-title">Campaign Overview</h3>
-        <div id="r${idx}-campaign" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
-      </div>
-      <div class="mb-4">
-        <h3 class="section-title">Performance Metrics</h3>
-        <div id="r${idx}-performance" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
-      </div>
-      <div class="mb-4">
-        <h3 class="section-title">Delivery &amp; Spend</h3>
-        <div id="r${idx}-delivery" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
-      </div>
-      <div class="mb-4" id="r${idx}-top-performers-section">
-        <h3 class="section-title">Top Performing Titles</h3>
-        <div class="top-wrap"><div id="r${idx}-top-performers" class="top-grid"></div></div>
-      </div>
-      <div class="mb-4" id="r${idx}-top-markets-section">
-        <h3 class="section-title">Top Performing Markets</h3>
-        <div class="top-wrap"><div id="r${idx}-top-markets" class="top-grid"></div></div>
-      </div>
+      <div class="mb-4"><h3 class="section-title">Campaign Overview</h3><div id="r${idx}-campaign" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div></div>
+      <div class="mb-4"><h3 class="section-title">Performance Metrics</h3><div id="r${idx}-performance" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div></div>
+      <div class="mb-4"><h3 class="section-title">Delivery &amp; Spend</h3><div id="r${idx}-delivery" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div></div>
+      <div class="mb-4" id="r${idx}-top-performers-section"><h3 class="section-title">Top Performing Titles</h3><div class="top-wrap"><div id="r${idx}-top-performers" class="top-grid"></div></div></div>
+      <div class="mb-4" id="r${idx}-top-markets-section"><h3 class="section-title">Top Performing Markets</h3><div class="top-wrap"><div id="r${idx}-top-markets" class="top-grid"></div></div></div>
       <div id="r${idx}-warnings" class="mb-4"></div>
-
       <details class="disclosure mb-2">
         <summary>
           <svg class="chev w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
           <span>See Full Validation Report</span>
         </summary>
-        <div class="body">
-          <div id="r${idx}-vr" class="vr"></div>
-        </div>
-      </details>
-    `;
+        <div class="body"><div id="r${idx}-vr" class="vr"></div></div>
+      </details>`;
     container.appendChild(card);
     renderReviewCard(eoc, idx);
   });
 }
 
 function renderReviewCard(eoc, idx) {
-  const v = eoc.validation;
-  const inputs = v.summary_inputs || {};
-  const displayInputs = Object.assign({}, inputs);
-  if (displayInputs.live_dates) displayInputs.live_dates = compactDateRange(displayInputs.live_dates);
-
-  renderTilesTo(`r${idx}-campaign`, [
-    { key: 'campaign_name', label: 'Campaign' },
-    { key: 'client',        label: 'Client' },
-    { key: 'markets',       label: 'Markets' },
-    { key: 'live_dates',    label: 'Live Dates' },
-  ], displayInputs);
-  renderTilesTo(`r${idx}-performance`, [
-    { key: 'ctr',             label: 'CTR' },
-    { key: 'engagement_rate', label: 'Engagement Rate' },
-    { key: 'vcr',             label: 'VCR' },
-    { key: 'on_screen_rate',  label: 'On-Screen Rate' },
-  ], displayInputs);
-  renderTilesTo(`r${idx}-delivery`, [
-    { key: 'delivered_impressions', label: 'Impressions' },
-    { key: 'budget',                label: 'Budget' },
-    { key: 'delivery_incl_av',      label: 'Delivery (incl. AV)' },
-    { key: 'added_value_worth',     label: 'Added Value' },
-  ], displayInputs);
-
-  renderTopGroupsTo(`r${idx}-top-performers`, `r${idx}-top-performers-section`, [
-    { key: 'top_ctr',             title: 'CTR' },
-    { key: 'top_engagement_rate', title: 'Engagement Rate' },
-    { key: 'top_vcr',             title: 'VCR' },
-  ], inputs);
+  const v = eoc.validation; const inputs = v.summary_inputs || {};
+  const di = Object.assign({}, inputs);
+  if (di.live_dates) di.live_dates = compactDateRange(di.live_dates);
+  renderTilesTo(`r${idx}-campaign`, [{key:'campaign_name',label:'Campaign'},{key:'client',label:'Client'},{key:'markets',label:'Markets'},{key:'live_dates',label:'Live Dates'}], di);
+  renderTilesTo(`r${idx}-performance`, [{key:'ctr',label:'CTR'},{key:'engagement_rate',label:'Engagement Rate'},{key:'vcr',label:'VCR'},{key:'on_screen_rate',label:'On-Screen Rate'}], di);
+  renderTilesTo(`r${idx}-delivery`, [{key:'delivered_impressions',label:'Impressions'},{key:'budget',label:'Budget'},{key:'delivery_incl_av',label:'Delivery (incl. AV)'},{key:'added_value_worth',label:'Added Value'}], di);
+  renderTopGroupsTo(`r${idx}-top-performers`,`r${idx}-top-performers-section`,[{key:'top_ctr',title:'CTR'},{key:'top_engagement_rate',title:'Engagement Rate'},{key:'top_vcr',title:'VCR'}],inputs);
   renderTopMarketsFor(idx, inputs);
-
-  const warnEl = document.getElementById(`r${idx}-warnings`);
-  warnEl.innerHTML = Object.keys(inputs).length === 0
+  document.getElementById(`r${idx}-warnings`).innerHTML = Object.keys(inputs).length === 0
     ? `<div class="flex gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><span>⚠</span><div>No campaign fields extracted. Check the EOC sheet structure.</div></div>`
-    : `<div class="flex items-center gap-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
-         <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
-         <span><strong>EOC validated.</strong> Ready to build.</span>
-       </div>`;
-
+    : `<div class="flex items-center gap-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3"><svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg><span><strong>EOC validated.</strong> Ready to build.</span></div>`;
   renderFormattedReport(v.display_validation_text || '', inputs, `r${idx}-vr`);
 }
 
@@ -432,8 +363,7 @@ function renderReviewCard(eoc, idx) {
 async function renderCustomiseTabs() {
   if (!state.sections.length) {
     const res = await fetch('/api/sections');
-    const data = await res.json();
-    state.sections = data.sections || [];
+    state.sections = (await res.json()).sections || [];
   }
   state.eocs.forEach(eoc => {
     if (!eoc._sectionsInitialised) {
@@ -451,20 +381,13 @@ async function renderCustomiseTabs() {
 }
 
 function renderTabBar() {
-  const bar = document.getElementById('customise-tabs');
-  bar.innerHTML = state.eocs.map((eoc, idx) => {
-    const active = idx === state.activeTab;
-    return `<button class="c-tab ${active ? 'active' : ''}" onclick="switchTab(${idx})">
-      ${escapeHtml(eocLabel(eoc))}
-    </button>`;
-  }).join('');
+  document.getElementById('customise-tabs').innerHTML = state.eocs.map((eoc, idx) =>
+    `<button class="c-tab ${idx === state.activeTab ? 'active' : ''}" onclick="switchTab(${idx})">${escapeHtml(eocLabel(eoc))}</button>`
+  ).join('');
 }
 
 function switchTab(idx) {
-  saveActiveTabState();
-  state.activeTab = idx;
-  renderTabBar();
-  renderActivePanel();
+  saveActiveTabState(); state.activeTab = idx; renderTabBar(); renderActivePanel();
 }
 
 function saveActiveTabState() {
@@ -476,30 +399,26 @@ function saveActiveTabState() {
 
 function renderActivePanel() {
   const container = document.getElementById('customise-panels');
-  const eoc = state.eocs[state.activeTab];
-  const idx = state.activeTab;
+  const eoc = state.eocs[state.activeTab]; const idx = state.activeTab;
   if (!eoc) return;
 
+  // Flush top-left corner only when first tab is active
+  const flushClass = state.activeTab === 0 ? 'panel-flush-tl' : '';
   const atLimit = eoc.execSummary.length >= EXEC_MAX;
 
   container.innerHTML = `
-    <div class="card-elev p-8" style="border-top-left-radius:0;">
-
+    <div class="card-elev p-8 ${flushClass}">
       <div class="mb-8">
         <div class="text-sm font-medium mb-3">What Should I Build?</div>
         <div class="grid grid-cols-3 gap-3" id="output-chips-${idx}">
           ${['one_pager','slide_deck','both'].map(val => {
-            const labels = { one_pager:'One Pager', slide_deck:'Full Deck', both:'Both' };
-            const icons = {
-              one_pager:  'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
-              slide_deck: 'M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z',
-              both:       'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2',
-            };
+            const labels={one_pager:'One Pager',slide_deck:'Full Deck',both:'Both'};
+            const icons={one_pager:'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',slide_deck:'M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z',both:'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2'};
             const sel = eoc.outputType === val;
-            return `<label class="output-chip ${sel ? 'selected' : ''}" data-output="${val}" onclick="setOutputType(${idx}, '${val}', this)">
-              <input type="radio" name="output_type_${idx}" value="${val}" class="hidden" ${sel ? 'checked' : ''} />
+            return `<label class="output-chip ${sel?'selected':''}" data-output="${val}" onclick="setOutputType(${idx},'${val}',this)">
+              <input type="radio" name="output_type_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>
               <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="${icons[val]}"/></svg>
-              <div class="text-sm mt-2 ${sel ? 'font-medium' : ''}">${labels[val]}</div>
+              <div class="text-sm mt-2 ${sel?'font-medium':''}">${labels[val]}</div>
             </label>`;
           }).join('')}
         </div>
@@ -507,7 +426,7 @@ function renderActivePanel() {
 
       <div class="mb-8">
         <div class="flex items-center justify-between mb-3">
-          <div class="text-sm font-medium" id="sections-label-${idx}">${eoc.outputType === 'slide_deck' ? 'Slide Deck Sections' : 'One Pager Sections'}</div>
+          <div class="text-sm font-medium" id="sections-label-${idx}">${eoc.outputType==='slide_deck'?'Slide Deck Sections':'One Pager Sections'}</div>
           <div class="flex gap-2 text-xs">
             <button class="text-blue-600 hover:underline" onclick="selectAllSections(${idx})">Select All</button>
             <span class="text-gray-300">|</span>
@@ -521,40 +440,41 @@ function renderActivePanel() {
         <div class="flex items-center justify-between mb-2">
           <div class="text-sm font-medium">Executive Summary</div>
           <div class="flex gap-3 items-center">
-            ${eoc.validation && eoc.validation.claude_exec_summary
-              ? `<span class="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">✦ Claude</span>`
-              : ''}
+            ${eoc.validation && eoc.validation.claude_exec_summary ? `<span class="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">✦ Claude</span>` : ''}
             <button class="text-xs text-blue-600 hover:underline" onclick="onRegenerateClick(${idx})">
               <svg class="inline w-3.5 h-3.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
               Regenerate
             </button>
           </div>
         </div>
-        <textarea id="exec-summary-input" rows="5" maxlength="${EXEC_MAX}"
-          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${atLimit ? 'exec-ta-overlimit' : ''}"
-          oninput="onExecInput(${idx}, this)">${escapeHtml(eoc.execSummary)}</textarea>
+        <div class="exec-ta-wrap">
+          <textarea id="exec-summary-input" rows="5" maxlength="${EXEC_MAX}"
+            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${atLimit?'exec-ta-overlimit':''}"
+            oninput="onExecInput(${idx},this)">${escapeHtml(eoc.execSummary)}</textarea>
+          <div id="exec-ta-spinner" class="exec-ta-spinner hidden">
+            <svg class="spinner w-7 h-7 text-blue-500" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="40 60"/></svg>
+          </div>
+        </div>
         <div class="text-xs text-gray-500 mt-1 flex items-center gap-1">
-          <span id="summary-count" class="${atLimit ? 'exec-count-overlimit' : ''}">${eoc.execSummary.length}</span>
-          <span class="${atLimit ? 'exec-count-overlimit' : ''}">/ ${EXEC_MAX} characters</span>
+          <span id="summary-count" class="${atLimit?'exec-count-overlimit':''}">${eoc.execSummary.length}</span>
+          <span id="summary-count-label" class="${atLimit?'exec-count-overlimit':''}">/ ${EXEC_MAX} characters</span>
           <span id="summary-variant-hint" class="ml-1 text-gray-400">${getVariantHint(eoc)}</span>
-          ${atLimit ? `<span class="ml-1 text-red-500 font-medium">· limit reached</span>` : ''}
         </div>
       </div>
 
-      <details id="advanced-options-${idx}" class="bg-gray-50 rounded-lg p-4 ${eoc.outputType === 'both' ? '' : 'hidden'}">
+      <details id="advanced-options-${idx}" class="bg-gray-50 rounded-lg p-4 ${eoc.outputType==='both'?'':'hidden'}">
         <summary class="cursor-pointer text-sm font-medium text-gray-700">Advanced Options</summary>
         <div class="mt-4">
           <label class="text-xs text-gray-600">Deck mode</label>
-          <select id="deck-mode-${idx}" class="block w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
-            onchange="setDeckMode(${idx}, this.value)">
-            <option value="matching" ${eoc.deckMode === 'matching' ? 'selected' : ''}>Matching (uses same sections as One Pager)</option>
-            <option value="full"     ${eoc.deckMode === 'full'     ? 'selected' : ''}>Full (all available slides)</option>
-            <option value="custom"   ${eoc.deckMode === 'custom'   ? 'selected' : ''}>Custom (pick deck sections separately)</option>
+          <select id="deck-mode-${idx}" class="block w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm" onchange="setDeckMode(${idx},this.value)">
+            <option value="matching" ${eoc.deckMode==='matching'?'selected':''}>Matching (uses same sections as One Pager)</option>
+            <option value="full"     ${eoc.deckMode==='full'    ?'selected':''}>Full (all available slides)</option>
+            <option value="custom"   ${eoc.deckMode==='custom'  ?'selected':''}>Custom (pick deck sections separately)</option>
           </select>
         </div>
       </details>
 
-      <div id="custom-deck-section-${idx}" class="mb-8 mt-4 ${(eoc.outputType === 'both' && eoc.deckMode === 'custom') ? '' : 'hidden'}">
+      <div id="custom-deck-section-${idx}" class="mb-8 mt-4 ${(eoc.outputType==='both'&&eoc.deckMode==='custom')?'':'hidden'}">
         <div class="flex items-center justify-between mb-3">
           <div class="text-sm font-medium">Custom Slide Deck Sections</div>
           <div class="flex gap-2 text-xs">
@@ -565,186 +485,27 @@ function renderActivePanel() {
         </div>
         <div id="deck-sections-grid-${idx}" class="grid grid-cols-2 gap-2"></div>
       </div>
+    </div>`;
 
-    </div>
-  `;
   renderSectionsGrid(idx);
 }
 
 // ============================================================
-// EXEC SUMMARY input handling
+// EXEC SUMMARY — input + regenerate (Claude API)
 // ============================================================
 function onExecInput(idx, ta) {
   const eoc = state.eocs[idx];
-  eoc.execSummary = ta.value;
-  eoc.execUserEdited = true;
-  const len = ta.value.length;
-  const atLimit = len >= EXEC_MAX;
-
+  eoc.execSummary = ta.value; eoc.execUserEdited = true;
+  const len = ta.value.length; const atLimit = len >= EXEC_MAX;
   const countEl = document.getElementById('summary-count');
+  const labelEl = document.getElementById('summary-count-label');
   const hintEl  = document.getElementById('summary-variant-hint');
-
-  if (countEl) {
-    countEl.textContent = len;
-    // Rebuild the sibling span text too
-    const sibling = countEl.nextElementSibling;
-    if (sibling) {
-      sibling.textContent = `/ ${EXEC_MAX} characters`;
-      sibling.className = atLimit ? 'exec-count-overlimit' : '';
-    }
-    countEl.className = atLimit ? 'exec-count-overlimit' : '';
-  }
+  if (countEl) { countEl.textContent = len; countEl.className = atLimit ? 'exec-count-overlimit' : ''; }
+  if (labelEl) { labelEl.className = atLimit ? 'exec-count-overlimit' : ''; }
   ta.classList.toggle('exec-ta-overlimit', atLimit);
   if (hintEl) hintEl.textContent = '· edited';
-
-  // Show/hide the "limit reached" warning span
-  const limitSpan = ta.parentElement.querySelector('.limit-reached-msg');
-  // We re-render the hint area inline rather than hunting for a span
 }
 
-function eocLabel(eoc) {
-  if (eoc.validation) {
-    const name = (eoc.validation.summary_inputs || {}).campaign_name;
-    if (name) return name;
-  }
-  return eoc.file.name.replace(/\.[^.]+$/, '');
-}
-
-function getVariantHint(eoc) {
-  if (eoc.execUserEdited) return '· edited';
-  if (eoc.validation && eoc.validation.claude_exec_summary && eoc.execVariantIndex === 0) return '· Claude';
-  const names = ['Performance-led', 'Brand-led', 'Concise'];
-  return `· ${names[eoc.execVariantIndex] || ''}`;
-}
-
-// ============================================================
-// SECTION GRIDS
-// ============================================================
-function renderSectionsGrid(idx) {
-  const eoc = state.eocs[idx];
-  const grid = document.getElementById(`sections-grid-${idx}`);
-  if (!grid) return;
-  grid.innerHTML = '';
-  state.sections.forEach(s => {
-    if (s.section_id === 'TITLE_OVERVIEW') return;
-    const noData = eoc.noDataSections.has(s.section_id);
-    const isSel  = eoc.selectedSections.has(s.section_id);
-    const badge  = noData ? `<span class="no-data-badge">Not enough data</span>` : '';
-    const req    = s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : '';
-    grid.insertAdjacentHTML('beforeend', `
-      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''} ${noData ? 'no-data' : ''}"
-        onclick="toggleSection(event, ${idx}, '${escapeHtml(s.section_id)}', ${s.required})">
-        <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
-        <span class="text-sm label-text">${escapeHtml(s.label)}${req}</span>
-        ${badge}
-      </label>`);
-  });
-}
-
-function renderDeckSectionsGrid(idx) {
-  const eoc = state.eocs[idx];
-  if (!eoc.selectedDeckSections.size) eoc.selectedDeckSections = new Set(eoc.selectedSections);
-  const grid = document.getElementById(`deck-sections-grid-${idx}`);
-  if (!grid) return;
-  grid.innerHTML = '';
-  state.sections.forEach(s => {
-    if (s.section_id === 'TITLE_OVERVIEW') return;
-    const noData = eoc.noDataSections.has(s.section_id);
-    const isSel  = eoc.selectedDeckSections.has(s.section_id);
-    const badge  = noData ? `<span class="no-data-badge">Not enough data</span>` : '';
-    const req    = s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : '';
-    grid.insertAdjacentHTML('beforeend', `
-      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''} ${noData ? 'no-data' : ''}"
-        onclick="toggleDeckSection(event, ${idx}, '${escapeHtml(s.section_id)}', ${s.required})">
-        <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
-        <span class="text-sm label-text">${escapeHtml(s.label)}${req}</span>
-        ${badge}
-      </label>`);
-  });
-}
-
-function toggleSection(e, idx, sectionId, required) {
-  e.preventDefault();
-  if (required) return;
-  const eoc = state.eocs[idx];
-  const el = e.currentTarget;
-  const cb = el.querySelector('input');
-  if (eoc.selectedSections.has(sectionId)) {
-    eoc.selectedSections.delete(sectionId); el.classList.remove('selected'); cb.checked = false;
-  } else {
-    eoc.selectedSections.add(sectionId); el.classList.add('selected'); cb.checked = true;
-  }
-}
-
-function toggleDeckSection(e, idx, sectionId, required) {
-  e.preventDefault();
-  if (required) return;
-  const eoc = state.eocs[idx];
-  const el = e.currentTarget;
-  const cb = el.querySelector('input');
-  if (eoc.selectedDeckSections.has(sectionId)) {
-    eoc.selectedDeckSections.delete(sectionId); el.classList.remove('selected'); cb.checked = false;
-  } else {
-    eoc.selectedDeckSections.add(sectionId); el.classList.add('selected'); cb.checked = true;
-  }
-}
-
-function selectAllSections(idx) {
-  const eoc = state.eocs[idx];
-  eoc.selectedSections = new Set(state.sections.map(s => s.section_id));
-  document.querySelectorAll(`#sections-grid-${idx} label`).forEach(el => {
-    el.classList.add('selected');
-    const cb = el.querySelector('input'); if (!cb.disabled) cb.checked = true;
-  });
-}
-function selectNoSections(idx) {
-  const eoc = state.eocs[idx];
-  eoc.selectedSections.clear();
-  document.querySelectorAll(`#sections-grid-${idx} label`).forEach(el => {
-    const cb = el.querySelector('input');
-    if (cb.disabled) { eoc.selectedSections.add(el.dataset.section); return; }
-    el.classList.remove('selected'); cb.checked = false;
-  });
-}
-function selectAllDeckSections(idx) {
-  const eoc = state.eocs[idx];
-  eoc.selectedDeckSections = new Set(state.sections.map(s => s.section_id));
-  document.querySelectorAll(`#deck-sections-grid-${idx} label`).forEach(el => {
-    el.classList.add('selected');
-    const cb = el.querySelector('input'); if (!cb.disabled) cb.checked = true;
-  });
-}
-function selectNoDeckSections(idx) {
-  const eoc = state.eocs[idx];
-  eoc.selectedDeckSections.clear();
-  document.querySelectorAll(`#deck-sections-grid-${idx} label`).forEach(el => {
-    const cb = el.querySelector('input');
-    if (cb.disabled) { eoc.selectedDeckSections.add(el.dataset.deckSection); return; }
-    el.classList.remove('selected'); cb.checked = false;
-  });
-}
-
-function setOutputType(idx, val, el) {
-  const eoc = state.eocs[idx];
-  eoc.outputType = val;
-  document.querySelectorAll(`#output-chips-${idx} .output-chip`).forEach(c => c.classList.remove('selected'));
-  el.classList.add('selected');
-  document.getElementById(`sections-label-${idx}`).textContent =
-    val === 'slide_deck' ? 'Slide Deck Sections' : 'One Pager Sections';
-  document.getElementById(`advanced-options-${idx}`).classList.toggle('hidden', val !== 'both');
-  const showCustom = val === 'both' && eoc.deckMode === 'custom';
-  document.getElementById(`custom-deck-section-${idx}`).classList.toggle('hidden', !showCustom);
-}
-
-function setDeckMode(idx, val) {
-  state.eocs[idx].deckMode = val;
-  document.getElementById(`custom-deck-section-${idx}`).classList.toggle('hidden', val !== 'custom');
-  if (val === 'custom') renderDeckSectionsGrid(idx);
-}
-
-// ============================================================
-// EXEC SUMMARY — Regenerate
-// ============================================================
 function onRegenerateClick(idx) {
   const eoc = state.eocs[idx];
   if (eoc.execUserEdited) {
@@ -763,335 +524,197 @@ function confirmRegenerate() {
   if (state.regenTargetIdx !== null) doRegenerate(state.regenTargetIdx);
   state.regenTargetIdx = null;
 }
-function doRegenerate(idx) {
+
+async function doRegenerate(idx) {
   const eoc = state.eocs[idx];
-  eoc.execVariantIndex = (eoc.execVariantIndex + 1) % 3;
-  eoc.execSummary = buildExecSummary(eoc.validation, eoc.execVariantIndex);
   eoc.execUserEdited = false;
+
+  // Show spinner over textarea
   const ta = document.getElementById('exec-summary-input');
+  const spinner = document.getElementById('exec-ta-spinner');
+  const hintEl  = document.getElementById('summary-variant-hint');
+  if (spinner) spinner.classList.remove('hidden');
+  if (ta) ta.disabled = true;
+
+  try {
+    const res = await fetch('/api/exec-summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary_inputs: (eoc.validation && eoc.validation.summary_inputs) || {} }),
+    });
+    const data = await res.json();
+    if (data.summary) {
+      eoc.execSummary = data.summary;
+      eoc.execVariantIndex = 0;
+    } else {
+      // Claude unavailable — fall back to next template variant
+      eoc.execVariantIndex = (eoc.execVariantIndex + 1) % 3;
+      eoc.execSummary = buildExecSummary(eoc.validation, eoc.execVariantIndex);
+    }
+  } catch (_) {
+    eoc.execVariantIndex = (eoc.execVariantIndex + 1) % 3;
+    eoc.execSummary = buildExecSummary(eoc.validation, eoc.execVariantIndex);
+  }
+
+  if (spinner) spinner.classList.add('hidden');
   if (ta) {
+    ta.disabled = false;
     ta.value = eoc.execSummary;
     ta.classList.remove('exec-ta-overlimit');
     const countEl = document.getElementById('summary-count');
     if (countEl) { countEl.textContent = eoc.execSummary.length; countEl.className = ''; }
-    const hintEl = document.getElementById('summary-variant-hint');
-    if (hintEl) hintEl.textContent = getVariantHint(eoc);
+    const labelEl = document.getElementById('summary-count-label');
+    if (labelEl) labelEl.className = '';
   }
+  if (hintEl) hintEl.textContent = data && data.summary ? '· Claude' : getVariantHint(eoc);
 }
+
+function eocLabel(eoc) {
+  if (eoc.validation) { const n = (eoc.validation.summary_inputs||{}).campaign_name; if (n) return n; }
+  return eoc.file.name.replace(/\.[^.]+$/, '');
+}
+
+function getVariantHint(eoc) {
+  if (eoc.execUserEdited) return '· edited';
+  if (eoc.validation && eoc.validation.claude_exec_summary && eoc.execVariantIndex === 0) return '· Claude';
+  return `· ${['Performance-led','Brand-led','Concise'][eoc.execVariantIndex]||''}`;
+}
+
+// ============================================================
+// SECTION GRIDS
+// ============================================================
+function renderSectionsGrid(idx) {
+  const eoc = state.eocs[idx]; const grid = document.getElementById(`sections-grid-${idx}`);
+  if (!grid) return; grid.innerHTML = '';
+  state.sections.forEach(s => {
+    if (s.section_id === 'TITLE_OVERVIEW') return;
+    const noData=eoc.noDataSections.has(s.section_id), isSel=eoc.selectedSections.has(s.section_id);
+    grid.insertAdjacentHTML('beforeend', `
+      <label class="section-chip ${isSel?'selected':''} ${s.required?'required':''} ${noData?'no-data':''}"
+        onclick="toggleSection(event,${idx},'${escapeHtml(s.section_id)}',${s.required})">
+        <input type="checkbox" ${isSel?'checked':''} ${s.required?'disabled':''} class="rounded"/>
+        <span class="text-sm label-text">${escapeHtml(s.label)}${s.required?' <span class="text-xs text-gray-500">(required)</span>':''}</span>
+        ${noData?'<span class="no-data-badge">Not enough data</span>':''}
+      </label>`);
+  });
+}
+
+function renderDeckSectionsGrid(idx) {
+  const eoc = state.eocs[idx];
+  if (!eoc.selectedDeckSections.size) eoc.selectedDeckSections = new Set(eoc.selectedSections);
+  const grid = document.getElementById(`deck-sections-grid-${idx}`);
+  if (!grid) return; grid.innerHTML = '';
+  state.sections.forEach(s => {
+    if (s.section_id === 'TITLE_OVERVIEW') return;
+    const noData=eoc.noDataSections.has(s.section_id), isSel=eoc.selectedDeckSections.has(s.section_id);
+    grid.insertAdjacentHTML('beforeend', `
+      <label class="section-chip ${isSel?'selected':''} ${s.required?'required':''} ${noData?'no-data':''}"
+        onclick="toggleDeckSection(event,${idx},'${escapeHtml(s.section_id)}',${s.required})">
+        <input type="checkbox" ${isSel?'checked':''} ${s.required?'disabled':''} class="rounded"/>
+        <span class="text-sm label-text">${escapeHtml(s.label)}${s.required?' <span class="text-xs text-gray-500">(required)</span>':''}</span>
+        ${noData?'<span class="no-data-badge">Not enough data</span>':''}
+      </label>`);
+  });
+}
+
+function toggleSection(e,idx,sid,req){e.preventDefault();if(req)return;const eoc=state.eocs[idx],el=e.currentTarget,cb=el.querySelector('input');if(eoc.selectedSections.has(sid)){eoc.selectedSections.delete(sid);el.classList.remove('selected');cb.checked=false;}else{eoc.selectedSections.add(sid);el.classList.add('selected');cb.checked=true;}}
+function toggleDeckSection(e,idx,sid,req){e.preventDefault();if(req)return;const eoc=state.eocs[idx],el=e.currentTarget,cb=el.querySelector('input');if(eoc.selectedDeckSections.has(sid)){eoc.selectedDeckSections.delete(sid);el.classList.remove('selected');cb.checked=false;}else{eoc.selectedDeckSections.add(sid);el.classList.add('selected');cb.checked=true;}}
+function selectAllSections(idx){const eoc=state.eocs[idx];eoc.selectedSections=new Set(state.sections.map(s=>s.section_id));document.querySelectorAll(`#sections-grid-${idx} label`).forEach(el=>{el.classList.add('selected');const cb=el.querySelector('input');if(!cb.disabled)cb.checked=true;});}
+function selectNoSections(idx){const eoc=state.eocs[idx];eoc.selectedSections.clear();document.querySelectorAll(`#sections-grid-${idx} label`).forEach(el=>{const cb=el.querySelector('input');if(cb.disabled){eoc.selectedSections.add(el.dataset.section);return;}el.classList.remove('selected');cb.checked=false;});}
+function selectAllDeckSections(idx){const eoc=state.eocs[idx];eoc.selectedDeckSections=new Set(state.sections.map(s=>s.section_id));document.querySelectorAll(`#deck-sections-grid-${idx} label`).forEach(el=>{el.classList.add('selected');const cb=el.querySelector('input');if(!cb.disabled)cb.checked=true;});}
+function selectNoDeckSections(idx){const eoc=state.eocs[idx];eoc.selectedDeckSections.clear();document.querySelectorAll(`#deck-sections-grid-${idx} label`).forEach(el=>{const cb=el.querySelector('input');if(cb.disabled){eoc.selectedDeckSections.add(el.dataset.deckSection);return;}el.classList.remove('selected');cb.checked=false;});}
+
+function setOutputType(idx,val,el){const eoc=state.eocs[idx];eoc.outputType=val;document.querySelectorAll(`#output-chips-${idx} .output-chip`).forEach(c=>c.classList.remove('selected'));el.classList.add('selected');document.getElementById(`sections-label-${idx}`).textContent=val==='slide_deck'?'Slide Deck Sections':'One Pager Sections';document.getElementById(`advanced-options-${idx}`).classList.toggle('hidden',val!=='both');document.getElementById(`custom-deck-section-${idx}`).classList.toggle('hidden',!(val==='both'&&eoc.deckMode==='custom'));}
+function setDeckMode(idx,val){state.eocs[idx].deckMode=val;document.getElementById(`custom-deck-section-${idx}`).classList.toggle('hidden',val!=='custom');if(val==='custom')renderDeckSectionsGrid(idx);}
 
 // ============================================================
 // STEP 4 + 5 — Generate + Done
 // ============================================================
 async function startGeneration() {
-  saveActiveTabState();
-  goToStep(4);
+  saveActiveTabState(); goToStep(4);
   const list = document.getElementById('progress-list');
-  list.innerHTML = state.eocs.map((eoc, idx) => {
+  list.innerHTML = state.eocs.map((eoc,idx) => {
     const steps = buildStepList(eoc.outputType);
-    return `
-      <div class="bg-gray-50 rounded-xl p-5" id="prog-block-${idx}">
-        <div class="text-sm font-medium text-gray-700 mb-3">${escapeHtml(eocLabel(eoc))}</div>
-        <div class="space-y-2" id="prog-steps-${idx}">
-          ${steps.map((s, i) => `
-            <div class="prog-item flex items-center gap-3" data-i="${i}">
-              <span class="prog-icon w-5 h-5 inline-block text-gray-400">○</span>
-              <span class="text-sm text-gray-600">${escapeHtml(s)}</span>
-            </div>`).join('')}
-        </div>
-        <div id="prog-error-${idx}" class="hidden mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3"></div>
-      </div>`;
+    return `<div class="bg-gray-50 rounded-xl p-5" id="prog-block-${idx}">
+      <div class="text-sm font-medium text-gray-700 mb-3">${escapeHtml(eocLabel(eoc))}</div>
+      <div class="space-y-2" id="prog-steps-${idx}">
+        ${steps.map((s,i)=>`<div class="prog-item flex items-center gap-3" data-i="${i}"><span class="prog-icon w-5 h-5 inline-block text-gray-400">○</span><span class="text-sm text-gray-600">${escapeHtml(s)}</span></div>`).join('')}
+      </div>
+      <div id="prog-error-${idx}" class="hidden mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3"></div>
+    </div>`;
   }).join('');
-
-  const results = await Promise.all(state.eocs.map((eoc, idx) => generateOne(eoc, idx)));
+  const results = await Promise.all(state.eocs.map((eoc,idx) => generateOne(eoc,idx)));
   setTimeout(() => showDone(results), 500);
 }
 
 function buildStepList(outputType) {
-  return [
-    'Reading EOC Data',
-    'Validating Campaign Data',
-    outputType === 'slide_deck' ? null : 'Populating One Pager',
-    outputType === 'one_pager'  ? null : 'Building Slide Deck',
-    'Final Polish',
-  ].filter(Boolean);
+  return ['Reading EOC Data','Validating Campaign Data',outputType==='slide_deck'?null:'Populating One Pager',outputType==='one_pager'?null:'Building Slide Deck','Final Polish'].filter(Boolean);
 }
 
-function markProgStep(idx, stepIdx, status) {
-  const el = document.querySelector(`#prog-steps-${idx} .prog-item[data-i="${stepIdx}"]`);
-  if (!el) return;
-  const icon = el.querySelector('.prog-icon');
-  if (status === 'active') icon.innerHTML = '<svg class="spinner w-5 h-5" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="3" stroke-dasharray="40 60"/></svg>';
-  else if (status === 'done') icon.innerHTML = '<span class="text-green-600">✓</span>';
+function markProgStep(idx,stepIdx,status) {
+  const el=document.querySelector(`#prog-steps-${idx} .prog-item[data-i="${stepIdx}"]`); if(!el)return;
+  const icon=el.querySelector('.prog-icon');
+  if(status==='active')icon.innerHTML='<svg class="spinner w-5 h-5" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="3" stroke-dasharray="40 60"/></svg>';
+  else if(status==='done')icon.innerHTML='<span class="text-green-600">✓</span>';
 }
 
-async function generateOne(eoc, idx) {
-  const steps = buildStepList(eoc.outputType);
-  for (let i = 0; i < steps.length - 1; i++) {
-    setTimeout(() => markProgStep(idx, i, 'active'), i * 400);
-    setTimeout(() => markProgStep(idx, i, 'done'), (i + 1) * 400);
-  }
-  setTimeout(() => markProgStep(idx, steps.length - 1, 'active'), (steps.length - 1) * 400);
-
-  const isDeckOnly = eoc.outputType === 'slide_deck';
-  const primarySections = [...eoc.selectedSections];
-  const finalDeckSections = isDeckOnly ? primarySections : [...eoc.selectedDeckSections];
-  const fd = new FormData();
-  fd.append('eoc_file', eoc.file);
-  fd.append('output_type', eoc.outputType);
-  fd.append('selected_sections', JSON.stringify(primarySections));
-  fd.append('deck_mode', isDeckOnly ? 'custom' : eoc.deckMode);
-  fd.append('custom_deck_sections', JSON.stringify(finalDeckSections));
-  fd.append('exec_summary', eoc.execSummary || '');
-
+async function generateOne(eoc,idx) {
+  const steps=buildStepList(eoc.outputType);
+  for(let i=0;i<steps.length-1;i++){setTimeout(()=>markProgStep(idx,i,'active'),i*400);setTimeout(()=>markProgStep(idx,i,'done'),(i+1)*400);}
+  setTimeout(()=>markProgStep(idx,steps.length-1,'active'),(steps.length-1)*400);
+  const isDeckOnly=eoc.outputType==='slide_deck';
+  const fd=new FormData();
+  fd.append('eoc_file',eoc.file);fd.append('output_type',eoc.outputType);
+  fd.append('selected_sections',JSON.stringify([...eoc.selectedSections]));
+  fd.append('deck_mode',isDeckOnly?'custom':eoc.deckMode);
+  fd.append('custom_deck_sections',JSON.stringify(isDeckOnly?[...eoc.selectedSections]:[...eoc.selectedDeckSections]));
+  fd.append('exec_summary',eoc.execSummary||'');
   try {
-    const res = await fetch('/api/generate', { method: 'POST', body: fd });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Generation failed' }));
-      throw new Error(err.detail || 'Generation failed');
-    }
-    const data = await res.json();
-    markProgStep(idx, steps.length - 1, 'done');
-    return { ok: true, idx, data, label: eocLabel(eoc) };
-  } catch (err) {
-    const errEl = document.getElementById(`prog-error-${idx}`);
-    if (errEl) { errEl.textContent = `⚠ ${err.message}`; errEl.classList.remove('hidden'); }
-    return { ok: false, idx, error: err.message, label: eocLabel(eoc) };
+    const res=await fetch('/api/generate',{method:'POST',body:fd});
+    if(!res.ok){const err=await res.json().catch(()=>({detail:'Generation failed'}));throw new Error(err.detail||'Generation failed');}
+    const data=await res.json(); markProgStep(idx,steps.length-1,'done');
+    return {ok:true,idx,data,label:eocLabel(eoc)};
+  } catch(err) {
+    const errEl=document.getElementById(`prog-error-${idx}`);
+    if(errEl){errEl.textContent=`⚠ ${err.message}`;errEl.classList.remove('hidden');}
+    return {ok:false,idx,error:err.message,label:eocLabel(eoc)};
   }
 }
 
 function showDone(results) {
   goToStep(5);
-  const totalSec = state.generationStart ? Math.floor((Date.now() - state.generationStart) / 1000) : 0;
-  const timeStr = totalSec ? `Built in ${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')} · ` : '';
-  const count = results.filter(r => r.ok).length;
-  document.getElementById('done-meta').textContent =
-    `${timeStr}${count} of ${results.length} generated · ${new Date().toLocaleString()}`;
-
-  const dl = document.getElementById('done-downloads');
-  dl.innerHTML = '';
+  const totalSec=state.generationStart?Math.floor((Date.now()-state.generationStart)/1000):0;
+  const timeStr=totalSec?`Built in ${Math.floor(totalSec/60)}:${String(totalSec%60).padStart(2,'0')} · `:'';
+  document.getElementById('done-meta').textContent=`${timeStr}${results.filter(r=>r.ok).length} of ${results.length} generated · ${new Date().toLocaleString()}`;
+  const dl=document.getElementById('done-downloads'); dl.innerHTML='';
   results.forEach(r => {
-    const heading = `<h3 class="text-sm font-semibold text-gray-700 mb-2">${escapeHtml(r.label)}</h3>`;
-    if (!r.ok) {
-      dl.insertAdjacentHTML('beforeend', `<div>${heading}<div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3">⚠ ${escapeHtml(r.error)}</div></div>`);
-      return;
-    }
-    const cards = [];
-    if (r.data.one_pager_url) cards.push(`
-      <a href="${escapeHtml(r.data.one_pager_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3">
-        <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
-          <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        </div>
-        <div><div class="font-medium">One Pager</div><div class="text-xs text-gray-500 mt-1">.pptx · click to download</div></div>
-      </a>`);
-    if (r.data.deck_url) cards.push(`
-      <a href="${escapeHtml(r.data.deck_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3">
-        <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
-          <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
-        </div>
-        <div><div class="font-medium">Slide Deck</div><div class="text-xs text-gray-500 mt-1">.pptx · click to download</div></div>
-      </a>`);
-    dl.insertAdjacentHTML('beforeend', `<div>${heading}<div class="grid grid-cols-1 md:grid-cols-2 gap-3">${cards.join('')}</div></div>`);
+    const h=`<h3 class="text-sm font-semibold text-gray-700 mb-2">${escapeHtml(r.label)}</h3>`;
+    if(!r.ok){dl.insertAdjacentHTML('beforeend',`<div>${h}<div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3">⚠ ${escapeHtml(r.error)}</div></div>`);return;}
+    const cards=[];
+    if(r.data.one_pager_url)cards.push(`<a href="${escapeHtml(r.data.one_pager_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3"><div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0"><svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg></div><div><div class="font-medium">One Pager</div><div class="text-xs text-gray-500 mt-1">.pptx · click to download</div></div></a>`);
+    if(r.data.deck_url)cards.push(`<a href="${escapeHtml(r.data.deck_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3"><div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0"><svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg></div><div><div class="font-medium">Slide Deck</div><div class="text-xs text-gray-500 mt-1">.pptx · click to download</div></div></a>`);
+    dl.insertAdjacentHTML('beforeend',`<div>${h}<div class="grid grid-cols-1 md:grid-cols-2 gap-3">${cards.join('')}</div></div>`);
   });
 }
 
 // ============================================================
-// SHARED RENDERERS
+// SHARED RENDERERS + UTILITIES
 // ============================================================
-function renderTilesTo(containerId, fields, inputs) {
-  const el = document.getElementById(containerId);
-  if (!el) return;
-  el.innerHTML = '';
-  fields.forEach(f => {
-    const val = inputs[f.key];
-    if (val) el.insertAdjacentHTML('beforeend', `
-      <div class="metric-tile">
-        <div class="label">${escapeHtml(f.label)}</div>
-        <div class="value">${escapeHtml(val)}</div>
-      </div>`);
-  });
-}
+function renderTilesTo(id,fields,inputs){const el=document.getElementById(id);if(!el)return;el.innerHTML='';fields.forEach(f=>{const v=inputs[f.key];if(v)el.insertAdjacentHTML('beforeend',`<div class="metric-tile"><div class="label">${escapeHtml(f.label)}</div><div class="value">${escapeHtml(v)}</div></div>`);});}
+function renderTopGroupsTo(cid,sid,groups,inputs){const c=document.getElementById(cid);if(!c)return;c.innerHTML='';let any=false;groups.forEach(g=>{const l=inputs[g.key];if(Array.isArray(l)&&l.length){any=true;const rows=l.map(i=>`<div class="row"><span class="name">${escapeHtml(i.name||'—')}</span><span class="val">${escapeHtml(i.value||'—')}</span></div>`).join('');c.insertAdjacentHTML('beforeend',`<div class="top-col"><h5>${escapeHtml(g.title)}</h5>${rows}</div>`);}});const s=document.getElementById(sid);if(s)s.classList.toggle('hidden',!any);}
+function renderTopMarketsFor(idx,inputs){const candidates=[[{key:'top_ctr_markets',title:'CTR'},{key:'top_engagement_rate_markets',title:'Engagement Rate'},{key:'top_vcr_markets',title:'VCR'}],[{key:'top_ctr_market',title:'CTR'},{key:'top_engagement_rate_market',title:'Engagement Rate'},{key:'top_vcr_market',title:'VCR'}],[{key:'top_markets_ctr',title:'CTR'},{key:'top_markets_engagement_rate',title:'Engagement Rate'},{key:'top_markets_vcr',title:'VCR'}],[{key:'market_top_ctr',title:'CTR'},{key:'market_top_engagement_rate',title:'Engagement Rate'},{key:'market_top_vcr',title:'VCR'}]];for(const g of candidates){if(g.some(x=>Array.isArray(inputs[x.key])&&inputs[x.key].length)){renderTopGroupsTo(`r${idx}-top-markets`,`r${idx}-top-markets-section`,g,inputs);return;}}const s=document.getElementById(`r${idx}-top-markets-section`);if(s)s.classList.add('hidden');}
+function computeNoDataSections(eoc){eoc.noDataSections=new Set();const inputs=(eoc.validation&&eoc.validation.summary_inputs)||{};for(const[sid,keys]of Object.entries(SECTION_DATA_REQUIREMENTS)){if(!keys.some(k=>{const v=inputs[k];return Array.isArray(v)?v.length>0:!!v;}))eoc.noDataSections.add(sid);}}
 
-function renderTopGroupsTo(containerId, sectionId, groups, inputs) {
-  const container = document.getElementById(containerId);
-  if (!container) return;
-  container.innerHTML = '';
-  let anyShown = false;
-  groups.forEach(g => {
-    const list = inputs[g.key];
-    if (Array.isArray(list) && list.length) {
-      anyShown = true;
-      const rows = list.map(item => `
-        <div class="row">
-          <span class="name">${escapeHtml(item.name || '—')}</span>
-          <span class="val">${escapeHtml(item.value || '—')}</span>
-        </div>`).join('');
-      container.insertAdjacentHTML('beforeend', `<div class="top-col"><h5>${escapeHtml(g.title)}</h5>${rows}</div>`);
-    }
-  });
-  const sec = document.getElementById(sectionId);
-  if (sec) sec.classList.toggle('hidden', !anyShown);
-}
+function renderFormattedReport(markdown,inputs,targetId){const el=document.getElementById(targetId);if(!el)return;if(!markdown){el.innerHTML='<p class="text-sm text-gray-500">No validation report available.</p>';return;}const lines=markdown.split('\n');const sections=[];let current=null,subHeader=null;for(let raw of lines){const line=raw.trim();if(!line){subHeader=null;continue;}const sm=line.match(/^\*\*([^*:]+)\*\*$/);if(sm){current={title:sm[1].trim(),blocks:[]};sections.push(current);subHeader=null;continue;}if(!current)continue;const kv=line.match(/^[•\-]\s*\*\*([^:*]+):\*\*\s*(.+)$/);if(kv){ensureBlock(current,'kv',subHeader).items.push({k:kv[1].trim(),v:kv[2].trim()});continue;}const bl=line.match(/^[•\-]\s+(.+)$/);if(bl){ensureBlock(current,'list',subHeader).items.push(bl[1].trim());continue;}if(!line.startsWith('*')&&!line.startsWith('•')&&!line.startsWith('-')){subHeader=line;continue;}}const html=sections.map(s=>{const tl=s.title.trim().toLowerCase();if(tl.startsWith('top performing'))return renderTopPerformersInReport(s);if(tl==='creative formats'){const items=s.blocks.flatMap(b=>b.items).map(i=>typeof i==='string'?i:`${i.k}: ${i.v}`);return `<div class="vr-section"><h4>${escapeHtml(s.title)}</h4>${items.map(i=>`<div class="vr-inline">${escapeHtml(i)}</div>`).join('')}</div>`;}const body=s.blocks.map(b=>{const sub=b.subHeader?`<div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-3 mb-1">${escapeHtml(b.subHeader)}</div>`:'';if(b.type==='kv')return sub+b.items.map(i=>`<div class="vr-row"><span class="k">${escapeHtml(i.k)}</span><span class="v">${escapeHtml(i.v)}</span></div>`).join('');return sub+b.items.map(i=>`<div class="vr-inline">${escapeHtml(i)}</div>`).join('');}).join('');return `<div class="vr-section"><h4>${escapeHtml(s.title)}</h4>${body}</div>`;}).join('');el.innerHTML=html||`<pre class="text-xs whitespace-pre-wrap text-gray-600">${escapeHtml(markdown)}</pre>`;}
+function renderTopPerformersInReport(section){const cols=[];let cur=null;section.blocks.forEach(b=>{if(b.subHeader&&(!cur||cur.title!==b.subHeader)){cur={title:b.subHeader,rows:[]};cols.push(cur);}if(!cur){cur={title:'',rows:[]};cols.push(cur);}b.items.forEach(i=>cur.rows.push(typeof i==='string'?i:`${i.k} - ${i.v}`));});const ch=cols.map(c=>`<div class="vr-top-col"><h5>${escapeHtml(c.title||'—')}</h5>${c.rows.map(r=>`<div class="vr-top-row">${escapeHtml(r)}</div>`).join('')}</div>`).join('');return `<div class="vr-section"><h4>${escapeHtml(section.title)}</h4><div class="vr-top-grid">${ch}</div></div>`;}
+function ensureBlock(section,type,subHeader){const last=section.blocks[section.blocks.length-1];if(last&&last.type===type&&(last.subHeader||null)===(subHeader||null))return last;const nb={type,items:[],subHeader:subHeader||null};section.blocks.push(nb);return nb;}
 
-function renderTopMarketsFor(idx, inputs) {
-  const candidates = [
-    [{ key:'top_ctr_markets',title:'CTR'},{key:'top_engagement_rate_markets',title:'Engagement Rate'},{key:'top_vcr_markets',title:'VCR'}],
-    [{ key:'top_ctr_market', title:'CTR'},{key:'top_engagement_rate_market', title:'Engagement Rate'},{key:'top_vcr_market', title:'VCR'}],
-    [{ key:'top_markets_ctr',title:'CTR'},{key:'top_markets_engagement_rate',title:'Engagement Rate'},{key:'top_markets_vcr',title:'VCR'}],
-    [{ key:'market_top_ctr', title:'CTR'},{key:'market_top_engagement_rate', title:'Engagement Rate'},{key:'market_top_vcr', title:'VCR'}],
-  ];
-  for (const groups of candidates) {
-    if (groups.some(g => Array.isArray(inputs[g.key]) && inputs[g.key].length)) {
-      renderTopGroupsTo(`r${idx}-top-markets`, `r${idx}-top-markets-section`, groups, inputs);
-      return;
-    }
-  }
-  const sec = document.getElementById(`r${idx}-top-markets-section`);
-  if (sec) sec.classList.add('hidden');
-}
-
-function computeNoDataSections(eoc) {
-  eoc.noDataSections = new Set();
-  const inputs = (eoc.validation && eoc.validation.summary_inputs) || {};
-  for (const [sectionId, requiredKeys] of Object.entries(SECTION_DATA_REQUIREMENTS)) {
-    const hasAnyData = requiredKeys.some(k => {
-      const val = inputs[k];
-      return Array.isArray(val) ? val.length > 0 : !!val;
-    });
-    if (!hasAnyData) eoc.noDataSections.add(sectionId);
-  }
-}
-
-// ============================================================
-// VALIDATION REPORT RENDERER (restored from single-file version)
-// ============================================================
-function renderFormattedReport(markdown, inputs, targetId) {
-  const el = document.getElementById(targetId);
-  if (!el) return;
-  if (!markdown) {
-    el.innerHTML = '<p class="text-sm text-gray-500">No validation report available.</p>';
-    return;
-  }
-  const lines = markdown.split('\n');
-  const sections = [];
-  let current = null, subHeader = null;
-  for (let raw of lines) {
-    const line = raw.trim();
-    if (!line) { subHeader = null; continue; }
-    const sectionMatch = line.match(/^\*\*([^*:]+)\*\*$/);
-    if (sectionMatch) {
-      current = { title: sectionMatch[1].trim(), blocks: [] };
-      sections.push(current); subHeader = null; continue;
-    }
-    if (!current) continue;
-    const kvMatch = line.match(/^[•\-]\s*\*\*([^:*]+):\*\*\s*(.+)$/);
-    if (kvMatch) { ensureBlock(current,'kv',subHeader).items.push({k:kvMatch[1].trim(),v:kvMatch[2].trim()}); continue; }
-    const bulletMatch = line.match(/^[•\-]\s+(.+)$/);
-    if (bulletMatch) { ensureBlock(current,'list',subHeader).items.push(bulletMatch[1].trim()); continue; }
-    if (!line.startsWith('*') && !line.startsWith('•') && !line.startsWith('-')) { subHeader = line; continue; }
-  }
-  const html = sections.map(s => {
-    const tl = s.title.trim().toLowerCase();
-    if (tl.startsWith('top performing')) return renderTopPerformersInReport(s);
-    if (tl === 'creative formats') {
-      const items = s.blocks.flatMap(b => b.items).map(i => typeof i === 'string' ? i : `${i.k}: ${i.v}`);
-      return `<div class="vr-section"><h4>${escapeHtml(s.title)}</h4>${items.map(i => `<div class="vr-inline">${escapeHtml(i)}</div>`).join('')}</div>`;
-    }
-    const body = s.blocks.map(b => {
-      const sub = b.subHeader ? `<div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-3 mb-1">${escapeHtml(b.subHeader)}</div>` : '';
-      if (b.type === 'kv') return sub + b.items.map(i => `<div class="vr-row"><span class="k">${escapeHtml(i.k)}</span><span class="v">${escapeHtml(i.v)}</span></div>`).join('');
-      return sub + b.items.map(i => `<div class="vr-inline">${escapeHtml(i)}</div>`).join('');
-    }).join('');
-    return `<div class="vr-section"><h4>${escapeHtml(s.title)}</h4>${body}</div>`;
-  }).join('');
-  el.innerHTML = html || `<pre class="text-xs whitespace-pre-wrap text-gray-600">${escapeHtml(markdown)}</pre>`;
-}
-
-function renderTopPerformersInReport(section) {
-  const cols = [];
-  let currentCol = null;
-  section.blocks.forEach(b => {
-    if (b.subHeader && (!currentCol || currentCol.title !== b.subHeader)) {
-      currentCol = { title: b.subHeader, rows: [] }; cols.push(currentCol);
-    }
-    if (!currentCol) { currentCol = { title: '', rows: [] }; cols.push(currentCol); }
-    b.items.forEach(i => currentCol.rows.push(typeof i === 'string' ? i : `${i.k} - ${i.v}`));
-  });
-  const colsHtml = cols.map(c => `
-    <div class="vr-top-col">
-      <h5>${escapeHtml(c.title || '—')}</h5>
-      ${c.rows.map(r => `<div class="vr-top-row">${escapeHtml(r)}</div>`).join('')}
-    </div>`).join('');
-  return `<div class="vr-section"><h4>${escapeHtml(section.title)}</h4><div class="vr-top-grid">${colsHtml}</div></div>`;
-}
-
-function ensureBlock(section, type, subHeader) {
-  const last = section.blocks[section.blocks.length - 1];
-  if (last && last.type === type && (last.subHeader || null) === (subHeader || null)) return last;
-  const newBlock = { type, items: [], subHeader: subHeader || null };
-  section.blocks.push(newBlock);
-  return newBlock;
-}
-
-// ============================================================
-// EXEC SUMMARY TEMPLATES (fallback)
-// ============================================================
-function buildExecSummary(validation, variantIndex) {
-  const i = validation && validation.summary_inputs ? validation.summary_inputs : {};
-  const variant = variantIndex % 3;
-  const campaign = i.campaign_name || 'The campaign';
-  const markets  = i.markets || '';
-  const imps     = i.delivered_impressions || '';
-  const ctr      = i.ctr || '';
-  const er       = i.engagement_rate || '';
-  const vcr      = i.vcr || '';
-  const osr      = i.on_screen_rate || '';
-  const topCtr   = (i.top_ctr && i.top_ctr[0]) ? i.top_ctr[0].name : '';
-  const topEr    = (i.top_engagement_rate && i.top_engagement_rate[0]) ? i.top_engagement_rate[0].name : '';
-  const topVcr   = (i.top_vcr && i.top_vcr[0]) ? i.top_vcr[0].name : '';
-  const impsNice = formatImpressions(imps);
-  const mktPhrase = markets ? `across ${markets}` : 'across the booked market';
-  const winner   = topEr || topCtr || topVcr || '';
-  if (variant === 0) return (
-    `${campaign} delivered strong audience engagement ${mktPhrase}, generating ${impsNice} and exceeding booked delivery. ` +
-    `The campaign achieved ${pct(ctr,'CTR')}${joinMetrics([pct(er,'engagement'),pct(vcr,'VCR'),pct(osr,'on-screen rate')])}. ` +
-    (winner ? `${winner} led performance across premium environments.` : `Performance was led by premium publishers in market.`)
-  );
-  if (variant === 1) return (
-    `${campaign} delivered strong upper-funnel performance ${mktPhrase}, generating ${impsNice} through premium publishing environments. ` +
-    (topCtr && topEr && topCtr !== topEr ? `${topCtr} and ${topEr} emerged as standout performers across CTR and engagement metrics, ` : (winner ? `${winner} stood out across the campaign, ` : '')) +
-    (vcr ? `while a ${vcr} video completion rate reinforced strong audience attention and brand visibility.` : `reinforcing strong audience attention and brand visibility.`)
-  );
-  return (
-    `${campaign} ran ${mktPhrase} and delivered ${impsNice}, with ${pct(ctr,'CTR')}${joinMetrics([pct(er,'engagement'),pct(vcr,'VCR')])}. ` +
-    (winner ? `${winner} led performance across the title set.` : `Delivery exceeded booked plan across the title set.`)
-  );
-}
-
-function formatImpressions(s) {
-  if (!s) return '';
-  const n = parseInt(String(s).replace(/[^\d]/g, ''), 10);
-  if (!isFinite(n) || n <= 0) return s;
-  if (n >= 1_000_000) return `over ${(n / 1_000_000).toFixed(2)}M impressions`;
-  return `${n.toLocaleString()} impressions`;
-}
-function pct(value, label) { return value ? `a ${value} ${label}` : ''; }
-function joinMetrics(arr) {
-  const list = arr.filter(Boolean);
-  if (!list.length) return '';
-  if (list.length === 1) return `, with ${list[0]}`;
-  const last = list.pop();
-  return `, with ${list.join(', ')} and ${last}`;
-}
-function compactDateRange(s) {
-  if (!s || typeof s !== 'string') return s;
-  const m = {'January':'Jan','February':'Feb','March':'Mar','April':'Apr','May':'May','June':'Jun','July':'Jul','August':'Aug','September':'Sep','October':'Oct','November':'Nov','December':'Dec'};
-  let out = s;
-  Object.keys(m).forEach(f => { out = out.replace(new RegExp('\\b' + f + '\\b', 'g'), m[f]); });
-  return out.replace(/\s+-\s+/g, ' – ');
-}
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-}
+function buildExecSummary(validation,variantIndex){const i=validation&&validation.summary_inputs?validation.summary_inputs:{};const v=variantIndex%3;const campaign=i.campaign_name||'The campaign',markets=i.markets||'',imps=i.delivered_impressions||'',ctr=i.ctr||'',er=i.engagement_rate||'',vcr=i.vcr||'',osr=i.on_screen_rate||'',topCtr=(i.top_ctr&&i.top_ctr[0])?i.top_ctr[0].name:'',topEr=(i.top_engagement_rate&&i.top_engagement_rate[0])?i.top_engagement_rate[0].name:'',topVcr=(i.top_vcr&&i.top_vcr[0])?i.top_vcr[0].name:'';const impsNice=formatImpressions(imps),mktPhrase=markets?`across ${markets}`:'across the booked market',winner=topEr||topCtr||topVcr||'';if(v===0)return`${campaign} delivered strong audience engagement ${mktPhrase}, generating ${impsNice} and exceeding booked delivery. The campaign achieved ${pct(ctr,'CTR')}${joinMetrics([pct(er,'engagement'),pct(vcr,'VCR'),pct(osr,'on-screen rate')])}. ${winner?`${winner} led performance across premium environments.`:'Performance was led by premium publishers in market.'}`;if(v===1)return`${campaign} delivered strong upper-funnel performance ${mktPhrase}, generating ${impsNice} through premium publishing environments. ${topCtr&&topEr&&topCtr!==topEr?`${topCtr} and ${topEr} emerged as standout performers across CTR and engagement metrics, `:(winner?`${winner} stood out across the campaign, `:'')}${vcr?`while a ${vcr} video completion rate reinforced strong audience attention and brand visibility.`:'reinforcing strong audience attention and brand visibility.'}`;return`${campaign} ran ${mktPhrase} and delivered ${impsNice}, with ${pct(ctr,'CTR')}${joinMetrics([pct(er,'engagement'),pct(vcr,'VCR')])}. ${winner?`${winner} led performance across the title set.`:'Delivery exceeded booked plan across the title set.'}`;}
+function formatImpressions(s){if(!s)return'';const n=parseInt(String(s).replace(/[^\d]/g,''),10);if(!isFinite(n)||n<=0)return s;if(n>=1_000_000)return`over ${(n/1_000_000).toFixed(2)}M impressions`;return`${n.toLocaleString()} impressions`;}
+function pct(v,l){return v?`a ${v} ${l}`:'';}
+function joinMetrics(arr){const list=arr.filter(Boolean);if(!list.length)return'';if(list.length===1)return`, with ${list[0]}`;const last=list.pop();return`, with ${list.join(', ')} and ${last}`;}
+function compactDateRange(s){if(!s||typeof s!=='string')return s;const m={'January':'Jan','February':'Feb','March':'Mar','April':'Apr','May':'May','June':'Jun','July':'Jul','August':'Aug','September':'Sep','October':'Oct','November':'Nov','December':'Dec'};let o=s;Object.keys(m).forEach(f=>{o=o.replace(new RegExp('\\b'+f+'\\b','g'),m[f]);});return o.replace(/\s+-\s+/g,' – ');}
+function escapeHtml(str){return String(str).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
 </script>
 
 {% endblock %}
