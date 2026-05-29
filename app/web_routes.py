@@ -30,6 +30,7 @@ import sqlite3
 import tempfile
 import traceback
 import uuid
+import httpx
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -239,6 +240,122 @@ def _rename_generated_file(original_filename: str, new_filename: str) -> str:
     except Exception:
         traceback.print_exc()
         return Path(original_filename).name
+
+
+# ----- Claude API exec summary ----------------------------------------------
+#
+# Calls Anthropic's Claude API to write a natural, agency-quality exec summary
+# from validated EOC data. Falls back silently to None on any failure so the
+# frontend can drop back to its JS templates without breaking the UX.
+#
+# Setup (Render env vars):
+#   ANTHROPIC_API_KEY  — required. Get from console.anthropic.com.
+#
+# If the key is unset or invalid, _claude_exec_summary returns None and the
+# rest of the app keeps working as if Claude wasn't there.
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+CLAUDE_MODEL = "claude-haiku-4-5"
+EXEC_SUMMARY_MAX_CHARS = 550
+
+
+def _truncate_to_sentence(text: str, max_chars: int) -> str:
+    """Truncate at a sentence boundary if possible, otherwise at a word."""
+    if len(text) <= max_chars:
+        return text
+    chunk = text[:max_chars]
+    for punct in (". ", "! ", "? "):
+        pos = chunk.rfind(punct)
+        if pos > max_chars // 2:
+            return chunk[: pos + 1].rstrip()
+    pos = chunk.rfind(" ")
+    return (chunk[:pos] if pos > 0 else chunk).rstrip()
+
+
+async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
+    """
+    Ask Claude to write a single-paragraph exec summary from validated EOC data.
+
+    Returns the summary string on success, or None on any failure
+    (no API key, network error, malformed response, etc). Callers should
+    treat None as the signal to fall back to JS template summaries.
+    """
+    if not ANTHROPIC_API_KEY:
+        # Useful breadcrumb in Render logs if Claude integration silently
+        # stops working — most common cause is a missing/expired API key.
+        print("[claude] ANTHROPIC_API_KEY is not set; skipping Claude summary")
+        return None
+
+    i = summary_inputs or {}
+
+    # Build a compact data dossier for Claude. Only include fields the EOC
+    # actually has, so we don't tell Claude about empty values.
+    data_lines: List[str] = []
+    if i.get("campaign_name"):         data_lines.append(f"Campaign: {i['campaign_name']}")
+    if i.get("client"):                data_lines.append(f"Client: {i['client']}")
+    if i.get("markets"):               data_lines.append(f"Markets: {i['markets']}")
+    if i.get("live_dates"):            data_lines.append(f"Live dates: {i['live_dates']}")
+    if i.get("delivered_impressions"): data_lines.append(f"Delivered impressions: {i['delivered_impressions']}")
+    if i.get("ctr"):                   data_lines.append(f"CTR: {i['ctr']}")
+    if i.get("engagement_rate"):       data_lines.append(f"Engagement rate: {i['engagement_rate']}")
+    if i.get("vcr"):                   data_lines.append(f"VCR: {i['vcr']}")
+    if i.get("on_screen_rate"):        data_lines.append(f"On-screen rate: {i['on_screen_rate']}")
+    if i.get("budget"):                data_lines.append(f"Budget: {i['budget']}")
+    if i.get("delivery_incl_av"):      data_lines.append(f"Delivery incl. AV: {i['delivery_incl_av']}")
+    if i.get("added_value_worth"):     data_lines.append(f"Added value: {i['added_value_worth']}")
+
+    # Top performers — feed Claude the top 3 names from each metric so it
+    # can highlight standouts naturally rather than listing them all.
+    for key, label in [
+        ("top_ctr", "Top CTR titles"),
+        ("top_engagement_rate", "Top engagement titles"),
+        ("top_vcr", "Top VCR titles"),
+    ]:
+        items = i.get(key)
+        if isinstance(items, list) and items:
+            top = ", ".join(x.get("name", "") for x in items[:3] if x.get("name"))
+            if top:
+                data_lines.append(f"{label}: {top}")
+
+    if not data_lines:
+        # No useful data at all — Claude won't have anything to write about.
+        return None
+
+    prompt = (
+        "You are writing the executive summary for a premium digital advertising "
+        "post-campaign analysis (PCA) report. Write a single, fluent paragraph of "
+        "3-4 sentences that a senior account manager would be proud to send to a client. "
+        "The tone should be confident, human, and results-focused — not corporate or "
+        "template-sounding. Highlight the standout metrics and top performers naturally. "
+        "Keep the paragraph under 500 characters. "
+        "Do not use bullet points, headers, or markdown. Output only the paragraph, nothing else.\n\n"
+        "Campaign data:\n" + "\n".join(data_lines)
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": CLAUDE_MODEL,
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        text = (data.get("content") or [{}])[0].get("text", "").strip()
+        return _truncate_to_sentence(text, EXEC_SUMMARY_MAX_CHARS) if text else None
+    except Exception:
+        # Any failure — bad key, rate limit, network blip, malformed response —
+        # log it and return None so the frontend falls back to JS templates.
+        traceback.print_exc()
+        return None
 
 
 # ----- Auth + admin support -------------------------------------------------
@@ -591,12 +708,39 @@ async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
             traceback.print_exc()
             raise HTTPException(status_code=400, detail=f"Validation failed: {exc}")
 
+    # Build the compact view of the parsed result, then ask Claude to write
+    # a natural exec summary from it. The Claude call is best-effort:
+    # if it returns None (no API key, network blip, etc.), the frontend
+    # falls back to its JS template summaries.
+    compact = compact_parsed_result(parsed)
+    summary_inputs = compact.get("summary_inputs") or {}
+    claude_summary = await _claude_exec_summary(summary_inputs)
+
     return JSONResponse({
         "status": "validated",
         "app_version": APP_VERSION,
         "filename": eoc_file.filename,
-        **compact_parsed_result(parsed),
+        "claude_exec_summary": claude_summary,
+        **compact,
     })
+
+
+@router.post("/api/exec-summary")
+async def api_exec_summary(request: Request):
+    """
+    Regenerate a Claude exec summary on demand.
+    Accepts JSON body: { "summary_inputs": { ... } }
+    Returns: { "summary": "..." } on success, or { "summary": null } on
+    any failure so the frontend can fall back to JS templates.
+    """
+    require_user(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    summary_inputs = (body or {}).get("summary_inputs") or {}
+    summary = await _claude_exec_summary(summary_inputs)
+    return JSONResponse({"summary": summary})
 
 
 @router.post("/api/generate")
