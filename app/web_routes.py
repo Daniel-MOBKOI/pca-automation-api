@@ -5,13 +5,21 @@ Web-app endpoints for the PCA Automation Generator.
 
 Lives at: app/web_routes.py (alongside app/main.py)
 
-v5 changes:
-- /logout now redirects to /web (not /, which is owned by main.py for the
-  legacy GPT health endpoint and returns JSON)
-- Smart filename renaming: generated .pptx files are renamed to
-  <CampaignName>_<Type>_<DDMMYY>.pptx so users can recognise them in
-  their Downloads folder. The rename happens after main.py writes the
-  file but before we store the path in the database.
+v7 changes:
+- Split admin functionality into its own dedicated /admin route.
+  /history is back to being a simple per-user view (matches v5 behaviour).
+  /admin shows the team-wide per-user summary with expandable rows.
+- Non-admins who try to hit /admin directly get silently redirected to
+  /history (defence in depth — the UI also hides the link).
+- New admin.html template.
+
+Earlier versions:
+- v6: admin-aware /history (replaced by this version's clean split)
+- v5: /logout redirects to /web, smart filename renaming
+- v4: SessionMiddleware cleanup task started by middleware
+- v3: persistent SQLite + per-user history
+- v2: Google OAuth Internal app
+- v1: original web wizard endpoints
 """
 
 from __future__ import annotations
@@ -24,9 +32,10 @@ import sqlite3
 import tempfile
 import traceback
 import uuid
-from datetime import datetime, timedelta
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import (
     APIRouter,
@@ -38,13 +47,9 @@ from fastapi import (
     Request,
     UploadFile,
 )
-import httpx
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-EXEC_SUMMARY_MAX_CHARS = 550
 
 
 # ----- Paths ----------------------------------------------------------------
@@ -201,17 +206,6 @@ def _ensure_cleanup_task_running() -> None:
 
 
 def _safe_filename_part(s: str, max_len: int = 60) -> str:
-    """
-    Slugify a string for use in a filename:
-      - replace any run of non-alphanumeric chars with "_"
-      - collapse repeated underscores
-      - trim leading/trailing underscores
-      - cap length
-    Examples:
-      "Prada Eyewear FW25"          -> "Prada_Eyewear_FW25"
-      "Rolex The Oscars UK 2026"    -> "Rolex_The_Oscars_UK_2026"
-      "Church's - SS26"             -> "Church_s_SS26"
-    """
     if not s:
         return "PCA"
     cleaned = re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")
@@ -220,30 +214,17 @@ def _safe_filename_part(s: str, max_len: int = 60) -> str:
 
 
 def _smart_filename(campaign_name: str, doc_type: str) -> str:
-    """
-    Build the desired download filename:
-        <CampaignName>_<Type>_<DDMMYY>.pptx
-    e.g. Prada_Eyewear_FW25_One_Pager_290526.pptx
-    """
-    # Daniel's preferred date format is DDMMYY (no separators)
     date_part = datetime.utcnow().strftime("%d%m%y")
     name = _safe_filename_part(campaign_name or "PCA")
     return f"{name}_{doc_type}_{date_part}.pptx"
 
 
 def _rename_generated_file(original_filename: str, new_filename: str) -> str:
-    """
-    Rename a freshly-generated file in GENERATED_FILES_DIR.
-    Falls back to the original filename if the rename fails (e.g. collision)
-    so the user always gets a working download even if naming is imperfect.
-    """
     try:
         src = GENERATED_FILES_DIR / Path(original_filename).name
         if not src.exists():
             return Path(original_filename).name
 
-        # Avoid collisions if a file with the same target name already exists
-        # (e.g. two PCAs generated in the same minute for the same campaign).
         dst = GENERATED_FILES_DIR / new_filename
         if dst.exists() and src != dst:
             stem = dst.stem
@@ -262,96 +243,7 @@ def _rename_generated_file(original_filename: str, new_filename: str) -> str:
         return Path(original_filename).name
 
 
-# ----- Claude API exec summary ----------------------------------------------
-
-
-def _truncate_to_sentence(text: str, max_chars: int) -> str:
-    """Truncate to max_chars, preferring a sentence boundary."""
-    if len(text) <= max_chars:
-        return text
-    chunk = text[:max_chars]
-    for punct in ('. ', '! ', '? '):
-        pos = chunk.rfind(punct)
-        if pos > max_chars // 2:
-            return chunk[:pos + 1].rstrip()
-    pos = chunk.rfind(' ')
-    return (chunk[:pos] if pos > 0 else chunk).rstrip()
-
-
-async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
-    """
-    Call claude-haiku-4-5 to write a natural exec summary paragraph.
-    Returns None on any failure so callers can fall back to templates.
-    Result is capped at EXEC_SUMMARY_MAX_CHARS (550) characters.
-    """
-    if not ANTHROPIC_API_KEY:
-        return None
-
-    i = summary_inputs or {}
-    data_lines = []
-    if i.get("campaign_name"):         data_lines.append(f"Campaign: {i['campaign_name']}")
-    if i.get("client"):                data_lines.append(f"Client: {i['client']}")
-    if i.get("markets"):               data_lines.append(f"Markets: {i['markets']}")
-    if i.get("live_dates"):            data_lines.append(f"Live dates: {i['live_dates']}")
-    if i.get("delivered_impressions"): data_lines.append(f"Delivered impressions: {i['delivered_impressions']}")
-    if i.get("ctr"):                   data_lines.append(f"CTR: {i['ctr']}")
-    if i.get("engagement_rate"):       data_lines.append(f"Engagement rate: {i['engagement_rate']}")
-    if i.get("vcr"):                   data_lines.append(f"VCR: {i['vcr']}")
-    if i.get("on_screen_rate"):        data_lines.append(f"On-screen rate: {i['on_screen_rate']}")
-    if i.get("budget"):                data_lines.append(f"Budget: {i['budget']}")
-    if i.get("delivery_incl_av"):      data_lines.append(f"Delivery incl. AV: {i['delivery_incl_av']}")
-    if i.get("added_value_worth"):     data_lines.append(f"Added value: {i['added_value_worth']}")
-
-    for key, label in [
-        ("top_ctr",             "Top CTR titles"),
-        ("top_engagement_rate", "Top engagement titles"),
-        ("top_vcr",             "Top VCR titles"),
-    ]:
-        items = i.get(key)
-        if isinstance(items, list) and items:
-            top = ", ".join(x.get("name", "") for x in items[:3] if x.get("name"))
-            if top:
-                data_lines.append(f"{label}: {top}")
-
-    if not data_lines:
-        return None
-
-    prompt = (
-        "You are writing the executive summary for a premium digital advertising "
-        "post-campaign analysis (PCA) report. Write a single, fluent paragraph of "
-        "3-4 sentences that a senior account manager would be proud to send to a client. "
-        "The tone should be confident, human, and results-focused — not corporate or "
-        "template-sounding. Highlight the standout metrics and top performers naturally. "
-        "Keep the paragraph under 500 characters. "
-        "Do not use bullet points, headers, or markdown. Output only the paragraph, nothing else.\n\n"
-        "Campaign data:\n" + "\n".join(data_lines)
-    )
-
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 300,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-            )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["content"][0]["text"].strip()
-        return _truncate_to_sentence(text, EXEC_SUMMARY_MAX_CHARS) if text else None
-    except Exception:
-        traceback.print_exc()
-        return None
-
-
-# ----- Auth -----------------------------------------------------------------
+# ----- Auth + admin support -------------------------------------------------
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from starlette.middleware.sessions import SessionMiddleware
@@ -364,6 +256,23 @@ APP_BASE_URL = os.getenv(
     "PUBLIC_BASE_URL",
     "https://pca-modular-builder-v12.onrender.com",
 )
+
+# ADMIN_EMAILS is a comma-separated list of email addresses, e.g.
+#   ADMIN_EMAILS=daniel.crittenden@mobkoi.com,jane.doe@mobkoi.com
+# Comparison is case-insensitive; whitespace and empty entries are ignored.
+ADMIN_EMAILS = {
+    e.strip().lower()
+    for e in os.getenv("ADMIN_EMAILS", "").split(",")
+    if e.strip()
+}
+
+
+def is_admin(user: Optional[Dict[str, Any]]) -> bool:
+    if not user:
+        return False
+    email = (user.get("email") or "").lower()
+    return email in ADMIN_EMAILS
+
 
 oauth = OAuth()
 oauth.register(
@@ -390,6 +299,23 @@ def require_user(request: Request) -> Dict[str, Any]:
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(WEB_TEMPLATES_DIR))
+
+
+# ----- Template context injection -------------------------------------------
+#
+# Every page that renders base.html needs to know whether the current user
+# is an admin (so the nav can conditionally show the "Admin" link). Rather
+# than passing is_admin manually on every TemplateResponse, we provide a
+# small helper that all routes use.
+
+def _page_context(request: Request, **extra) -> Dict[str, Any]:
+    user = current_user(request)
+    ctx: Dict[str, Any] = {
+        "user": user,
+        "is_admin": is_admin(user),
+    }
+    ctx.update(extra)
+    return ctx
 
 
 @router.get("/login")
@@ -435,8 +361,6 @@ async def auth_callback(request: Request):
 
 @router.get("/logout")
 async def logout(request: Request):
-    # SNAG FIX: redirect to /web (not /) so users see the landing page,
-    # not the legacy JSON health endpoint owned by main.py.
     request.session.clear()
     return RedirectResponse(url="/web")
 
@@ -448,7 +372,7 @@ async def logout(request: Request):
 async def web_landing(request: Request):
     if current_user(request):
         return RedirectResponse(url="/app")
-    return templates.TemplateResponse(request, "landing.html")
+    return templates.TemplateResponse(request, "landing.html", _page_context(request))
 
 
 @router.get("/app")
@@ -456,11 +380,15 @@ async def app_page(request: Request):
     user = current_user(request)
     if not user:
         return RedirectResponse(url="/web")
-    return templates.TemplateResponse(request, "app.html", {"user": user})
+    return templates.TemplateResponse(request, "app.html", _page_context(request))
 
 
 @router.get("/history")
 async def history_page(request: Request):
+    """
+    Always shows the logged-in user's OWN PCAs only.
+    Admins use /admin for the team-wide view.
+    """
     user = current_user(request)
     if not user:
         return RedirectResponse(url="/web")
@@ -477,11 +405,160 @@ async def history_page(request: Request):
     return templates.TemplateResponse(
         request,
         "history.html",
-        {
-            "user": user,
-            "runs": [dict(r) for r in rows],
-            "retention_days": FILE_RETENTION_DAYS,
-        },
+        _page_context(
+            request,
+            runs=[dict(r) for r in rows],
+            retention_days=FILE_RETENTION_DAYS,
+        ),
+    )
+
+
+# ----- Admin page -----------------------------------------------------------
+
+
+def _relative_time(iso_str: str) -> str:
+    """
+    Convert an ISO timestamp to a friendly relative string:
+    'just now', '5 min ago', '2 hours ago', 'yesterday', '3 days ago',
+    or fallback to the date for anything older than 14 days.
+    """
+    if not iso_str:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", ""))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delta = now - dt
+        seconds = int(delta.total_seconds())
+        if seconds < 60:
+            return "just now"
+        minutes = seconds // 60
+        if minutes < 60:
+            return f"{minutes} min ago"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        days = hours // 24
+        if days == 1:
+            return "yesterday"
+        if days < 14:
+            return f"{days} days ago"
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return iso_str[:10] if len(iso_str) >= 10 else iso_str
+
+
+# Friendly labels for output_type values stored in the DB.
+_OUTPUT_TYPE_LABELS = {
+    "one_pager": "One Pager",
+    "slide_deck": "Slide Deck",
+    "both": "One Pager + Slide Deck",
+}
+
+
+def _build_user_summaries(all_runs: List[sqlite3.Row]) -> List[Dict[str, Any]]:
+    """
+    Group a flat list of run rows by user and compute per-user summary stats.
+
+    Each summary dict contains:
+        email, name, picture, total_pcas, last_active (relative),
+        last_active_iso (raw, used for sorting), most_common_type,
+        first_used (date only), and runs (full list for the expanded row).
+
+    Sorted by total_pcas DESC, then most recent activity as tiebreaker,
+    so the most prolific users surface at the top.
+    """
+    grouped: Dict[str, List[sqlite3.Row]] = defaultdict(list)
+    for row in all_runs:
+        grouped[row["user_email"]].append(row)
+
+    user_meta: Dict[str, Dict[str, Any]] = {}
+    if grouped:
+        with db_connect() as conn:
+            placeholders = ",".join("?" * len(grouped))
+            rows = conn.execute(
+                f"SELECT email, name, picture, created_at FROM users WHERE email IN ({placeholders})",
+                tuple(grouped.keys()),
+            ).fetchall()
+            for r in rows:
+                user_meta[r["email"]] = dict(r)
+
+    summaries = []
+    for email, runs in grouped.items():
+        type_counter = Counter(r["output_type"] for r in runs if r["output_type"])
+        most_common_raw = type_counter.most_common(1)[0][0] if type_counter else None
+        most_common = _OUTPUT_TYPE_LABELS.get(most_common_raw, most_common_raw or "—")
+
+        last_active_iso = runs[0]["created_at"] if runs else None
+        first_used_iso = runs[-1]["created_at"] if runs else None
+
+        meta = user_meta.get(email, {})
+        summaries.append({
+            "email": email,
+            "name": meta.get("name") or email,
+            "picture": meta.get("picture"),
+            "total_pcas": len(runs),
+            "last_active": _relative_time(last_active_iso),
+            "last_active_iso": last_active_iso,
+            "most_common_type": most_common,
+            "first_used": first_used_iso[:10] if first_used_iso else "—",
+            "runs": [dict(r) for r in runs],
+        })
+
+    summaries.sort(
+        key=lambda s: (s["total_pcas"], s["last_active_iso"] or ""),
+        reverse=True,
+    )
+    return summaries
+
+
+@router.get("/admin")
+async def admin_page(request: Request):
+    """
+    Admin-only page showing per-user PCA activity across the whole team.
+    Non-admins (and unauthenticated visitors) get silently redirected to
+    /history — no scary error page, just sent to a place they can use.
+    """
+    user = current_user(request)
+    if not user:
+        return RedirectResponse(url="/web")
+    if not is_admin(user):
+        return RedirectResponse(url="/history")
+
+    with db_connect() as conn:
+        rows = conn.execute(
+            """SELECT run_id, user_email, created_at, eoc_filename, output_type,
+                      one_pager_filename, deck_filename, status
+               FROM runs
+               ORDER BY created_at DESC
+               LIMIT 1000"""
+        ).fetchall()
+
+    user_summaries = _build_user_summaries(rows)
+
+    total_pcas = len(rows)
+    active_user_count = len(user_summaries)
+
+    week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    recent_emails = {r["user_email"] for r in rows if r["created_at"] >= week_ago}
+    active_this_week = len(recent_emails)
+    pcas_this_week = sum(1 for r in rows if r["created_at"] >= week_ago)
+
+    return templates.TemplateResponse(
+        request,
+        "admin.html",
+        _page_context(
+            request,
+            user_summaries=user_summaries,
+            retention_days=FILE_RETENTION_DAYS,
+            headline_stats={
+                "total_pcas": total_pcas,
+                "active_users_total": active_user_count,
+                "active_users_week": active_this_week,
+                "pcas_this_week": pcas_this_week,
+            },
+        ),
     )
 
 
@@ -531,31 +608,12 @@ async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
             traceback.print_exc()
             raise HTTPException(status_code=400, detail=f"Validation failed: {exc}")
 
-    compact = compact_parsed_result(parsed)
-    summary_inputs = compact.get("summary_inputs") or {}
-    claude_summary = await _claude_exec_summary(summary_inputs)
-
     return JSONResponse({
         "status": "validated",
         "app_version": APP_VERSION,
         "filename": eoc_file.filename,
-        "claude_exec_summary": claude_summary,
-        **compact,
+        **compact_parsed_result(parsed),
     })
-
-
-@router.post("/api/exec-summary")
-async def api_exec_summary(request: Request):
-    """
-    Regenerate a Claude exec summary on demand.
-    Accepts JSON body: { "summary_inputs": { ... } }
-    Returns: { "summary": "..." } or { "summary": null } on failure.
-    """
-    require_user(request)
-    body = await request.json()
-    summary_inputs = body.get("summary_inputs") or {}
-    text = await _claude_exec_summary(summary_inputs)
-    return JSONResponse({"summary": text})
 
 
 @router.post("/api/generate")
@@ -610,7 +668,6 @@ async def api_generate(
         mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(exec_summary, mapped_values)
         summary_blob = compact_parsed_result(parsed)
 
-        # Pull campaign name from the parsed data for use in download filenames
         campaign_name = (
             (summary_blob.get("summary_inputs") or {}).get("campaign_name")
             or mapped_values.get("CAMPAIGN_NAME")
