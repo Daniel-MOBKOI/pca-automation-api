@@ -24,26 +24,25 @@
 {% else %}
 <div class="card-elev overflow-hidden">
   {#
-    Column widths:
-    - "When": fixed narrow (date only)
-    - "EOC File": fixed 110px — a third narrower than before; truncates with
-      full-name tooltip on hover; pr-6 padding-right keeps it clear of Type column
-    - "Type": fixed
-    - "Status": fixed narrow
-    - "Downloads": 240px — enough room for two buttons without clipping
+    Column widths (table-layout: fixed, 100% width):
+    - "When":      fixed 100px  — date only, never wraps
+    - "EOC File":  no width set — flex column, takes all remaining space, truncates with tooltip
+    - "Type":      fixed 190px  — widest value is "One Pager + Slide Deck"
+    - "Status":    fixed 80px   — "Done" badge only
+    - "Downloads": fixed 255px  — fits two buttons ("One Pager" + "Slide Deck") flush to right edge
   #}
   <table class="w-full text-[13px]" style="table-layout: fixed;">
     <colgroup>
-      <col style="width: 95px;" />
-      <col style="width: 110px;" />
-      <col style="width: 175px;" />
-      <col style="width: 75px;" />
-      <col style="width: 240px;" />
+      <col style="width: 100px;" />
+      <col />
+      <col style="width: 190px;" />
+      <col style="width: 80px;" />
+      <col style="width: 255px;" />
     </colgroup>
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr class="text-left text-gray-600 text-xs uppercase tracking-wide">
         <th class="px-4 py-2.5 font-medium">When</th>
-        <th class="px-4 py-2.5 pr-6 font-medium">EOC File</th>
+        <th class="px-4 py-2.5 font-medium">EOC File</th>
         <th class="px-4 py-2.5 font-medium">Type</th>
         <th class="px-4 py-2.5 font-medium">Status</th>
         <th class="px-4 py-2.5 font-medium">Downloads</th>
@@ -53,7 +52,6 @@
       {% for run in runs %}
       {% set type_display = {'one_pager': 'One Pager', 'slide_deck': 'Slide Deck', 'both': 'One Pager + Slide Deck'}.get(run.output_type, run.output_type) %}
       <tr class="hover:bg-gray-50 transition-colors">
-        {# Date only (no time). Stored timestamps are ISO 8601 — first 10 chars = YYYY-MM-DD. #}
         <td class="px-4 py-2.5 text-gray-600 whitespace-nowrap">{{ run.created_at[:10] }}</td>
         <td class="px-4 py-2.5 pr-6 font-medium truncate" title="{{ run.eoc_filename or '' }}">{{ run.eoc_filename or '—' }}</td>
         <td class="px-4 py-2.5 text-gray-600 whitespace-nowrap">{{ type_display }}</td>
