@@ -5,11 +5,13 @@ Web-app endpoints for the PCA Automation Generator.
 
 Lives at: app/web_routes.py (alongside app/main.py)
 
-v3 changes:
-- Adds cleanup_old_files() that deletes generated .pptx files older
-  than FILE_RETENTION_DAYS (default 30). Database rows are kept forever.
-- Runs cleanup on startup and every 24 hours via a background task.
-- /history page hides download links for files that have been cleaned up.
+v5 changes:
+- /logout now redirects to /web (not /, which is owned by main.py for the
+  legacy GPT health endpoint and returns JSON)
+- Smart filename renaming: generated .pptx files are renamed to
+  <CampaignName>_<Type>_<DDMMYY>.pptx so users can recognise them in
+  their Downloads folder. The rename happens after main.py writes the
+  file but before we store the path in the database.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import traceback
@@ -54,11 +57,7 @@ GENERATED_FILES_DIR = Path(
 )
 GENERATED_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
-# How long generated PPT files are kept before being deleted from disk.
-# Database history rows are kept indefinitely.
 FILE_RETENTION_DAYS = int(os.getenv("FILE_RETENTION_DAYS", "30"))
-
-# How often the cleanup task runs (in seconds). Default: every 24 hours.
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 
 PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -112,10 +111,6 @@ db_init()
 
 
 def cleanup_old_files() -> Dict[str, int]:
-    """
-    Delete generated .pptx files older than FILE_RETENTION_DAYS.
-    Returns counts for logging. Safe to run repeatedly.
-    """
     cutoff_iso = (datetime.utcnow() - timedelta(days=FILE_RETENTION_DAYS)).isoformat()
     deleted_files = 0
     missing_files = 0
@@ -147,8 +142,6 @@ def cleanup_old_files() -> Dict[str, int]:
                     errors += 1
                     traceback.print_exc()
 
-            # Null out the filenames in the DB so the UI knows to hide
-            # the download link. We keep the row itself forever.
             try:
                 with db_connect() as conn:
                     conn.execute(
@@ -175,7 +168,6 @@ def cleanup_old_files() -> Dict[str, int]:
 
 
 async def _cleanup_loop() -> None:
-    """Background task: run cleanup on startup, then every 24 hours."""
     while True:
         try:
             cleanup_old_files()
@@ -184,17 +176,10 @@ async def _cleanup_loop() -> None:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
 
 
-# Module-level flag so the background task is started exactly once,
-# regardless of which request triggers it first.
 _cleanup_task_started = False
 
 
 def _ensure_cleanup_task_running() -> None:
-    """
-    Start the cleanup background task on first request. This is more
-    reliable than @app.on_event('startup') when register_web_routes()
-    is called after the app has already initialised.
-    """
     global _cleanup_task_started
     if _cleanup_task_started:
         return
@@ -205,9 +190,72 @@ def _ensure_cleanup_task_running() -> None:
         print(f"[cleanup] background task scheduled (retention={FILE_RETENTION_DAYS}d)")
     except Exception:
         traceback.print_exc()
-        # If scheduling fails, at least run cleanup once synchronously
-        # so the disk doesn't fill up unbounded.
         cleanup_old_files()
+
+
+# ----- Smart filename helpers -----------------------------------------------
+
+
+def _safe_filename_part(s: str, max_len: int = 60) -> str:
+    """
+    Slugify a string for use in a filename:
+      - replace any run of non-alphanumeric chars with "_"
+      - collapse repeated underscores
+      - trim leading/trailing underscores
+      - cap length
+    Examples:
+      "Prada Eyewear FW25"          -> "Prada_Eyewear_FW25"
+      "Rolex The Oscars UK 2026"    -> "Rolex_The_Oscars_UK_2026"
+      "Church's - SS26"             -> "Church_s_SS26"
+    """
+    if not s:
+        return "PCA"
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")
+    cleaned = re.sub(r"_+", "_", cleaned)
+    return cleaned[:max_len] or "PCA"
+
+
+def _smart_filename(campaign_name: str, doc_type: str) -> str:
+    """
+    Build the desired download filename:
+        <CampaignName>_<Type>_<DDMMYY>.pptx
+    e.g. Prada_Eyewear_FW25_One_Pager_290526.pptx
+    """
+    # Daniel's preferred date format is DDMMYY (no separators)
+    date_part = datetime.utcnow().strftime("%d%m%y")
+    name = _safe_filename_part(campaign_name or "PCA")
+    return f"{name}_{doc_type}_{date_part}.pptx"
+
+
+def _rename_generated_file(original_filename: str, new_filename: str) -> str:
+    """
+    Rename a freshly-generated file in GENERATED_FILES_DIR.
+    Falls back to the original filename if the rename fails (e.g. collision)
+    so the user always gets a working download even if naming is imperfect.
+    """
+    try:
+        src = GENERATED_FILES_DIR / Path(original_filename).name
+        if not src.exists():
+            return Path(original_filename).name
+
+        # Avoid collisions if a file with the same target name already exists
+        # (e.g. two PCAs generated in the same minute for the same campaign).
+        dst = GENERATED_FILES_DIR / new_filename
+        if dst.exists() and src != dst:
+            stem = dst.stem
+            counter = 2
+            while True:
+                candidate = GENERATED_FILES_DIR / f"{stem}_{counter}.pptx"
+                if not candidate.exists():
+                    dst = candidate
+                    break
+                counter += 1
+
+        src.rename(dst)
+        return dst.name
+    except Exception:
+        traceback.print_exc()
+        return Path(original_filename).name
 
 
 # ----- Auth -----------------------------------------------------------------
@@ -294,8 +342,10 @@ async def auth_callback(request: Request):
 
 @router.get("/logout")
 async def logout(request: Request):
+    # SNAG FIX: redirect to /web (not /) so users see the landing page,
+    # not the legacy JSON health endpoint owned by main.py.
     request.session.clear()
-    return RedirectResponse(url="/")
+    return RedirectResponse(url="/web")
 
 
 # ----- Pages ----------------------------------------------------------------
@@ -428,6 +478,7 @@ async def api_generate(
     one_pager_filename: Optional[str] = None
     deck_filename: Optional[str] = None
     summary_blob: Dict[str, Any] = {}
+    campaign_name = ""
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
@@ -447,13 +498,22 @@ async def api_generate(
         mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(exec_summary, mapped_values)
         summary_blob = compact_parsed_result(parsed)
 
+        # Pull campaign name from the parsed data for use in download filenames
+        campaign_name = (
+            (summary_blob.get("summary_inputs") or {}).get("campaign_name")
+            or mapped_values.get("CAMPAIGN_NAME")
+            or "PCA"
+        )
+
         try:
             if output_type in ("one_pager", "both"):
                 op_result = build_grouped_stacked_modular_ppt(
                     selected_sections=section_list,
                     placeholder_values=mapped_values,
                 )
-                one_pager_filename = Path(op_result["filename"]).name
+                original = Path(op_result["filename"]).name
+                new_name = _smart_filename(campaign_name, "One_Pager")
+                one_pager_filename = _rename_generated_file(original, new_name)
 
             if output_type in ("slide_deck", "both"):
                 deck_request = SlideDeckFromEocRequest(
@@ -468,7 +528,9 @@ async def api_generate(
                     request=deck_request,
                     placeholder_values=mapped_values,
                 )
-                deck_filename = Path(deck_result["filename"]).name
+                original = Path(deck_result["filename"]).name
+                new_name = _smart_filename(campaign_name, "Slide_Deck")
+                deck_filename = _rename_generated_file(original, new_name)
 
         except Exception as exc:
             traceback.print_exc()
@@ -538,14 +600,10 @@ async def api_get_run(run_id: str, user=Depends(require_user)):
 
 
 def register_web_routes(app: FastAPI) -> None:
-    """Wire this module into the existing FastAPI app."""
     app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(router)
 
-    # Middleware that ensures the cleanup background task is running.
-    # Fires on every request, but the function itself is a no-op after
-    # the first call (idempotent via the _cleanup_task_started flag).
     @app.middleware("http")
     async def _cleanup_starter_middleware(request, call_next):
         _ensure_cleanup_task_running()
