@@ -118,7 +118,6 @@
     </div>
   </div>
 
-  <!-- Primary section picker. Label updates dynamically based on output type. -->
   <div class="mb-8">
     <div class="flex items-center justify-between mb-3">
       <div class="text-sm font-medium" id="onepager-sections-label">One Pager Sections</div>
@@ -131,12 +130,11 @@
     <div id="sections-grid" class="grid grid-cols-2 gap-2"></div>
   </div>
 
-  <!-- Exec summary with regenerate -->
   <div class="mb-6">
     <div class="flex items-center justify-between mb-2">
       <div class="text-sm font-medium">Executive Summary</div>
       <div class="flex gap-3 items-center">
-        <button class="text-xs text-blue-600 hover:underline" onclick="regenerateExecSummary()">
+        <button class="text-xs text-blue-600 hover:underline" onclick="onRegenerateClick()">
           <svg class="inline w-3.5 h-3.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
           Regenerate
         </button>
@@ -151,7 +149,6 @@
     </div>
   </div>
 
-  <!-- Advanced options: ONLY visible when output type is 'both' -->
   <details id="advanced-options" class="bg-gray-50 rounded-lg p-4 hidden">
     <summary class="cursor-pointer text-sm font-medium text-gray-700">Advanced Options</summary>
     <div class="mt-4 space-y-3">
@@ -166,7 +163,6 @@
     </div>
   </details>
 
-  <!-- Custom deck picker: ONLY visible when output='both' AND deck mode='custom' -->
   <div id="custom-deck-section" class="mb-8 hidden mt-4">
     <div class="flex items-center justify-between mb-3">
       <div class="text-sm font-medium">Custom Slide Deck Sections</div>
@@ -193,7 +189,10 @@
 
 <!-- STEP 4: Generating -->
 <section id="step-4" class="card-elev p-10 hidden">
-  <h2 class="text-xl font-semibold mb-1">Building Your PCA</h2>
+  <div class="flex items-baseline justify-between mb-1">
+    <h2 class="text-xl font-semibold">Building Your PCA</h2>
+    <div id="elapsed-timer" class="text-sm text-gray-500 font-medium font-mono">0:00</div>
+  </div>
   <p class="text-sm text-gray-500 mb-6">This usually takes around 30 seconds.</p>
   <div id="progress-list" class="space-y-2"></div>
 </section>
@@ -214,6 +213,25 @@
   </div>
 </section>
 
+<!-- Modal: warn before Regenerate overwrites user edits -->
+<div id="regen-warning-modal" class="hidden modal-backdrop">
+  <div class="modal-card">
+    <div class="flex items-start gap-3 mb-4">
+      <div class="w-9 h-9 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0">
+        <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+      </div>
+      <div>
+        <h3 class="font-semibold text-base">Discard your edits?</h3>
+        <p class="text-sm text-gray-600 mt-1">You've edited the executive summary. Regenerating will replace your text with a new version.</p>
+      </div>
+    </div>
+    <div class="flex gap-2 justify-end">
+      <button class="btn-ghost" onclick="cancelRegenerate()">Keep my edits</button>
+      <button class="btn-primary" onclick="confirmRegenerate()">Discard &amp; regenerate</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ----- State -----
 const state = {
@@ -229,9 +247,30 @@ const state = {
   execVariantIndex: 0,
   execVariantCount: 3,
   execUserEdited: false,
+  // Tab title + elapsed timer state
+  defaultTitle: document.title,
+  elapsedInterval: null,
+  elapsedStart: null,
+  // Tracks which section IDs the current EOC has no data for
+  noDataSections: new Set(),
 };
 
 const DEFAULT_SELECTED_SECTIONS = new Set(['TITLE_PERFORMANCE']);
+
+// Map section IDs -> the summary_inputs keys we'd expect them to need.
+// If none of these keys have data, we flag the section as "Not enough data".
+// Note: this is a heuristic — we err on the side of showing data exists
+// rather than hiding it incorrectly.
+const SECTION_DATA_REQUIREMENTS = {
+  'MARKET_PERFORMANCE': [
+    'top_ctr_markets', 'top_ctr_market', 'top_markets_ctr', 'market_top_ctr',
+    'top_engagement_rate_markets', 'top_engagement_rate_market',
+    'top_vcr_markets', 'top_vcr_market',
+  ],
+  'TOP_TITLES_MARKETS': [
+    'top_ctr_markets', 'top_ctr_market', 'top_markets_ctr', 'market_top_ctr',
+  ],
+};
 
 function goToStep(n) {
   state.step = n;
@@ -256,9 +295,20 @@ function resetAll() {
   state.execUserEdited = false;
   state.outputType = 'one_pager';
   state.deckMode = 'matching';
+  state.noDataSections = new Set();
   document.getElementById('file-input').value = '';
   document.getElementById('exec-summary-input').value = '';
+  setTabTitle('default');
   goToStep(1);
+}
+
+// ----- Tab title status -----
+function setTabTitle(mode) {
+  // mode: 'default' | 'generating' | 'done'
+  const base = state.defaultTitle.replace(/^[\(\.\w✓\s]+\)\s*/, '');
+  if (mode === 'generating') document.title = `(…) ${base}`;
+  else if (mode === 'done')   document.title = `(✓) ${base}`;
+  else                         document.title = base;
 }
 
 // ----- Step 1: Upload -----
@@ -296,11 +346,30 @@ async function handleFile(file) {
     state.execVariantIndex = 0;
     state.execUserEdited = false;
     state.execSummary = buildExecSummary(state.validation, 0);
+    computeNoDataSections();
     renderReview();
     await loadSections();
     goToStep(2);
   } catch (err) {
     statusEl.innerHTML = `<span class="text-red-600">⚠ ${escapeHtml(err.message)}. Please check the file and try again.</span>`;
+  }
+}
+
+/**
+ * Inspect the validation result and figure out which sections lack the
+ * data they'd need to render meaningfully. Stored as a Set of section IDs.
+ */
+function computeNoDataSections() {
+  state.noDataSections = new Set();
+  const inputs = (state.validation && state.validation.summary_inputs) || {};
+  for (const [sectionId, requiredKeys] of Object.entries(SECTION_DATA_REQUIREMENTS)) {
+    const hasAnyData = requiredKeys.some(k => {
+      const val = inputs[k];
+      return Array.isArray(val) ? val.length > 0 : !!val;
+    });
+    if (!hasAnyData) {
+      state.noDataSections.add(sectionId);
+    }
   }
 }
 
@@ -383,7 +452,27 @@ function joinMetrics(arr) {
   return `, with ${list.join(', ')} and ${last}`;
 }
 
-function regenerateExecSummary() {
+// ----- Regenerate flow with edit warning -----
+
+function onRegenerateClick() {
+  // If user has edits, show warning modal first. Otherwise regenerate immediately.
+  if (state.execUserEdited) {
+    document.getElementById('regen-warning-modal').classList.remove('hidden');
+  } else {
+    doRegenerate();
+  }
+}
+
+function cancelRegenerate() {
+  document.getElementById('regen-warning-modal').classList.add('hidden');
+}
+
+function confirmRegenerate() {
+  document.getElementById('regen-warning-modal').classList.add('hidden');
+  doRegenerate();
+}
+
+function doRegenerate() {
   state.execVariantIndex = (state.execVariantIndex + 1) % state.execVariantCount;
   state.execSummary = buildExecSummary(state.validation, state.execVariantIndex);
   state.execUserEdited = false;
@@ -403,7 +492,7 @@ function updateVariantHint() {
   }
 }
 
-// ----- Step 2: Review -----
+// ----- Step 2: Review (renderers — unchanged from v6) -----
 
 function compactDateRange(s) {
   if (!s || typeof s !== 'string') return s;
@@ -488,9 +577,6 @@ function renderTiles(containerId, fields, inputs) {
   });
 }
 
-// Generic 3-column "top X" renderer — used for both titles and markets.
-// Looks up keys like top_ctr / top_engagement_rate / top_vcr OR
-// top_ctr_market / top_engagement_rate_market / top_vcr_market.
 function renderTopGroups(containerId, sectionId, groups, inputs) {
   const container = document.getElementById(containerId);
   container.innerHTML = '';
@@ -525,8 +611,6 @@ function renderTopPerformers(inputs) {
 }
 
 function renderTopMarkets(inputs) {
-  // Backends vary on the key naming for top markets. Try a few common variants;
-  // first match wins. If the EOC has only one market, the section stays hidden.
   const candidates = [
     [
       { key: 'top_ctr_markets',             title: 'CTR' },
@@ -557,7 +641,6 @@ function renderTopMarkets(inputs) {
       return;
     }
   }
-  // No market data — hide the whole section
   document.getElementById('top-markets-section').classList.add('hidden');
 }
 
@@ -610,7 +693,6 @@ function renderFormattedReport(markdown, inputs) {
   const html = sections.map(s => {
     const titleLower = s.title.trim().toLowerCase();
 
-    // 3-column grid for any "Top Performing ..." section (titles OR markets)
     if (titleLower.startsWith('top performing')) {
       return renderTopPerformersInReport(s);
     }
@@ -725,11 +807,22 @@ function renderOnePagerSections() {
   grid.innerHTML = '';
   state.sections.forEach(s => {
     if (s.section_id === 'TITLE_OVERVIEW') return;
+
+    const noData = state.noDataSections.has(s.section_id);
     const isSel = state.selectedSections.has(s.section_id);
+
+    const badge = noData
+      ? `<span class="no-data-badge">Not enough data</span>`
+      : '';
+    const requiredNote = s.required
+      ? ' <span class="text-xs text-gray-500">(required)</span>'
+      : '';
+
     grid.insertAdjacentHTML('beforeend', `
-      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''}" data-section="${escapeHtml(s.section_id)}">
+      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''} ${noData ? 'no-data' : ''}" data-section="${escapeHtml(s.section_id)}">
         <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
-        <span class="text-sm">${escapeHtml(s.label)}${s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : ''}</span>
+        <span class="text-sm label-text">${escapeHtml(s.label)}${requiredNote}</span>
+        ${badge}
       </label>
     `);
   });
@@ -759,11 +852,22 @@ function renderDeckSections() {
   grid.innerHTML = '';
   state.sections.forEach(s => {
     if (s.section_id === 'TITLE_OVERVIEW') return;
+
+    const noData = state.noDataSections.has(s.section_id);
     const isSel = state.selectedDeckSections.has(s.section_id);
+
+    const badge = noData
+      ? `<span class="no-data-badge">Not enough data</span>`
+      : '';
+    const requiredNote = s.required
+      ? ' <span class="text-xs text-gray-500">(required)</span>'
+      : '';
+
     grid.insertAdjacentHTML('beforeend', `
-      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''}" data-deck-section="${escapeHtml(s.section_id)}">
+      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''} ${noData ? 'no-data' : ''}" data-deck-section="${escapeHtml(s.section_id)}">
         <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
-        <span class="text-sm">${escapeHtml(s.label)}${s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : ''}</span>
+        <span class="text-sm label-text">${escapeHtml(s.label)}${requiredNote}</span>
+        ${badge}
       </label>
     `);
   });
@@ -850,11 +954,6 @@ document.getElementById('deck-mode').addEventListener('change', e => {
   updateConditionalUI();
 });
 
-// Conditional UI logic:
-//   - 'one_pager'  → label = "One Pager Sections",     no advanced options
-//   - 'slide_deck' → label = "Slide Deck Sections",    no advanced options
-//   - 'both'       → label = "One Pager Sections",     advanced options visible
-//                    when deck mode = custom, second picker appears below
 function updateConditionalUI() {
   const label = document.getElementById('onepager-sections-label');
   const advanced = document.getElementById('advanced-options');
@@ -862,13 +961,10 @@ function updateConditionalUI() {
 
   if (state.outputType === 'slide_deck') {
     label.textContent = 'Slide Deck Sections';
-  } else if (state.outputType === 'both') {
-    label.textContent = 'One Pager Sections';
   } else {
     label.textContent = 'One Pager Sections';
   }
 
-  // Advanced options only when 'both' is selected
   const showAdvanced = state.outputType === 'both';
   advanced.classList.toggle('hidden', !showAdvanced);
 
@@ -880,8 +976,29 @@ function updateConditionalUI() {
 }
 
 // ----- Step 4 + 5: Generate -----
+
+function startElapsedTimer() {
+  state.elapsedStart = Date.now();
+  state.elapsedInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - state.elapsedStart) / 1000);
+    const mm = Math.floor(elapsed / 60);
+    const ss = String(elapsed % 60).padStart(2, '0');
+    document.getElementById('elapsed-timer').textContent = `${mm}:${ss}`;
+  }, 250);
+}
+
+function stopElapsedTimer() {
+  if (state.elapsedInterval) {
+    clearInterval(state.elapsedInterval);
+    state.elapsedInterval = null;
+  }
+}
+
 async function startGeneration() {
   goToStep(4);
+  setTabTitle('generating');
+  startElapsedTimer();
+
   const list = document.getElementById('progress-list');
   const steps = [
     'Reading EOC Data',
@@ -903,9 +1020,6 @@ async function startGeneration() {
   }
   setTimeout(() => markStep(steps.length - 1, 'active'), (steps.length - 1) * 400);
 
-  // For slide_deck output, the "primary" picker IS the deck section list,
-  // so we send it as both selected_sections and custom_deck_sections to
-  // keep the backend happy regardless of which it reads from.
   const isDeckOnly = state.outputType === 'slide_deck';
   const primarySections = [...state.selectedSections];
   const finalDeckSections = isDeckOnly
@@ -928,8 +1042,12 @@ async function startGeneration() {
     }
     const data = await res.json();
     markStep(steps.length - 1, 'done');
+    stopElapsedTimer();
+    setTabTitle('done');
     setTimeout(() => showDone(data), 500);
   } catch (err) {
+    stopElapsedTimer();
+    setTabTitle('default');
     list.insertAdjacentHTML('beforeend',
       `<div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">⚠ ${escapeHtml(err.message)}</div>
        <button class="btn-ghost mt-4" onclick="goToStep(3)">← Try again</button>`);
@@ -946,7 +1064,15 @@ function markStep(i, status) {
 
 function showDone(data) {
   goToStep(5);
-  document.getElementById('done-meta').textContent = `Run ID ${data.run_id.slice(0, 8)} · ${new Date().toLocaleString()}`;
+  const totalSec = state.elapsedStart
+    ? Math.floor((Date.now() - state.elapsedStart) / 1000)
+    : 0;
+  const timeStr = totalSec
+    ? `Built in ${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')} · `
+    : '';
+  document.getElementById('done-meta').textContent =
+    `${timeStr}Run ID ${data.run_id.slice(0, 8)} · ${new Date().toLocaleString()}`;
+
   const dl = document.getElementById('done-downloads');
   dl.innerHTML = '';
   if (data.one_pager_url) {
@@ -974,6 +1100,9 @@ function showDone(data) {
       </a>`);
   }
 }
+
+// Reset tab title if user navigates away while generating
+window.addEventListener('beforeunload', () => stopElapsedTimer());
 </script>
 
 {% endblock %}
