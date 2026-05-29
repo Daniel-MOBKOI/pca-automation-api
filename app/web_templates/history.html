@@ -22,6 +22,25 @@
   <p class="text-sm text-gray-500 mt-1"><a href="/app" class="text-blue-600 hover:underline">Build your first one</a> to see it here.</p>
 </div>
 {% else %}
+
+<!-- Search + filter bar -->
+<div class="flex items-center gap-3 mb-3">
+  <div class="relative flex-1 max-w-xs">
+    <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 111 11a6 6 0 0116 0z"/></svg>
+    <input id="search-input" type="text" placeholder="Search EOC filename…"
+      class="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+  </div>
+  <select id="date-filter"
+    class="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+    <option value="all">All time</option>
+    <option value="today">Today</option>
+    <option value="7">Last 7 days</option>
+    <option value="30">Last 30 days</option>
+  </select>
+  <span id="filter-count" class="text-xs text-gray-400 whitespace-nowrap"></span>
+  <button id="clear-filters" class="hidden text-xs text-blue-600 hover:underline whitespace-nowrap">Clear</button>
+</div>
+
 <div class="card-elev overflow-hidden">
   {#
     Column widths (table-layout: fixed, 100% width):
@@ -48,10 +67,12 @@
         <th class="px-4 py-2.5 font-medium">Downloads</th>
       </tr>
     </thead>
-    <tbody class="divide-y divide-gray-100">
+    <tbody id="runs-tbody" class="divide-y divide-gray-100">
       {% for run in runs %}
       {% set type_display = {'one_pager': 'One Pager', 'slide_deck': 'Slide Deck', 'both': 'One Pager + Slide Deck'}.get(run.output_type, run.output_type) %}
-      <tr class="hover:bg-gray-50 transition-colors">
+      <tr class="hover:bg-gray-50 transition-colors run-row"
+          data-filename="{{ (run.eoc_filename or '') | lower }}"
+          data-date="{{ run.created_at[:10] }}">
         <td class="px-4 py-2.5 text-gray-600 whitespace-nowrap">{{ run.created_at[:10] }}</td>
         <td class="px-4 py-2.5 pr-6 font-medium truncate" title="{{ run.eoc_filename or '' }}">{{ run.eoc_filename or '—' }}</td>
         <td class="px-4 py-2.5 text-gray-600 whitespace-nowrap">{{ type_display }}</td>
@@ -89,7 +110,78 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <!-- Empty state shown when filters produce no matches -->
+  <div id="no-results" class="hidden py-12 text-center text-sm text-gray-500">
+    No PCAs match your search.
+    <button onclick="clearFilters()" class="ml-1 text-blue-600 hover:underline">Clear filters</button>
+  </div>
 </div>
+
+<script>
+const searchInput = document.getElementById('search-input');
+const dateFilter  = document.getElementById('date-filter');
+const countEl     = document.getElementById('filter-count');
+const clearBtn    = document.getElementById('clear-filters');
+const noResults   = document.getElementById('no-results');
+const allRows     = Array.from(document.querySelectorAll('.run-row'));
+const totalCount  = allRows.length;
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function cutoffDate(value) {
+  if (value === 'all') return null;
+  const d = new Date();
+  if (value === 'today') {
+    return todayIso();  // exact match on today's date
+  }
+  d.setDate(d.getDate() - parseInt(value));
+  return d.toISOString().slice(0, 10);
+}
+
+function applyFilters() {
+  const query   = searchInput.value.trim().toLowerCase();
+  const period  = dateFilter.value;
+  const cutoff  = cutoffDate(period);
+  const today   = todayIso();
+  let visible   = 0;
+
+  allRows.forEach(row => {
+    const filename = row.dataset.filename;
+    const date     = row.dataset.date;
+
+    const matchesSearch = !query || filename.includes(query);
+    const matchesDate = !cutoff
+      ? true
+      : period === 'today'
+        ? date === today
+        : date >= cutoff;
+
+    const show = matchesSearch && matchesDate;
+    row.classList.toggle('hidden', !show);
+    if (show) visible++;
+  });
+
+  // Count label
+  const isFiltered = query || period !== 'all';
+  countEl.textContent = isFiltered ? `${visible} of ${totalCount}` : '';
+  clearBtn.classList.toggle('hidden', !isFiltered);
+  noResults.classList.toggle('hidden', visible > 0);
+}
+
+function clearFilters() {
+  searchInput.value = '';
+  dateFilter.value  = 'all';
+  applyFilters();
+}
+
+searchInput.addEventListener('input', applyFilters);
+dateFilter.addEventListener('change', applyFilters);
+clearBtn.addEventListener('click', clearFilters);
+</script>
+
 {% endif %}
 
 {% endblock %}
