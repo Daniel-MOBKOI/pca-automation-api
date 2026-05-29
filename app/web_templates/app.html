@@ -244,10 +244,8 @@ const state = {
   execVariantIndex: 0,
   execVariantCount: 3,
   execUserEdited: false,
-  // Silent timer: tracks generation duration for the Done screen only.
-  // No visible elapsed counter, no tab title status — generation is fast
-  // enough (~2s) that those felt like noise. We keep the start time so the
-  // Done screen can still show "Built in X:XX".
+  // Timer starts when the EOC upload completes (end of handleFile), so the
+  // Done screen reflects the full end-to-end time including review & customise.
   generationStart: null,
   noDataSections: new Set(),
 };
@@ -333,6 +331,7 @@ async function handleFile(file) {
     computeNoDataSections();
     renderReview();
     await loadSections();
+    state.generationStart = Date.now(); // timer starts once EOC is validated
     goToStep(2);
   } catch (err) {
     statusEl.innerHTML = `<span class="text-red-600">⚠ ${escapeHtml(err.message)}. Please check the file and try again.</span>`;
@@ -956,7 +955,6 @@ function updateConditionalUI() {
 
 async function startGeneration() {
   goToStep(4);
-  state.generationStart = Date.now();  // silent — only used for Done screen total
 
   const list = document.getElementById('progress-list');
   const steps = [
@@ -1020,7 +1018,7 @@ function markStep(i, status) {
 function showDone(data) {
   goToStep(5);
 
-  // Total time from "Generate" click → Done screen
+  // Total time from EOC upload completing → Done screen
   const totalSec = state.generationStart
     ? Math.floor((Date.now() - state.generationStart) / 1000)
     : 0;
