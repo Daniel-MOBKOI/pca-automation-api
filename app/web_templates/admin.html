@@ -41,23 +41,25 @@
 {% else %}
 
 <div class="card-elev overflow-hidden">
+  {#
+    Columns: chevron / User / Total PCAs / PCAs This Week / Last Active
+    Dropped from v1: Most Common Type, First Used
+  #}
   <table class="w-full text-[13px]" style="table-layout: fixed;">
     <colgroup>
       <col style="width: 36px;" />
       <col />
-      <col style="width: 110px;" />
+      <col style="width: 120px;" />
       <col style="width: 140px;" />
-      <col style="width: 180px;" />
-      <col style="width: 110px;" />
+      <col style="width: 150px;" />
     </colgroup>
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr class="text-left text-gray-600 text-xs uppercase tracking-wide">
         <th class="px-3 py-2.5 font-medium"></th>
         <th class="px-4 py-2.5 font-medium">User</th>
         <th class="px-4 py-2.5 font-medium">Total PCAs</th>
+        <th class="px-4 py-2.5 font-medium">PCAs This Week</th>
         <th class="px-4 py-2.5 font-medium">Last Active</th>
-        <th class="px-4 py-2.5 font-medium">Most Common Type</th>
-        <th class="px-4 py-2.5 font-medium">First Used</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
@@ -86,13 +88,12 @@
           </div>
         </td>
         <td class="px-4 py-3 font-medium text-gray-900">{{ u.total_pcas }}</td>
+        <td class="px-4 py-3 font-medium text-gray-900">{{ u.pcas_this_week }}</td>
         <td class="px-4 py-3 text-gray-600">{{ u.last_active }}</td>
-        <td class="px-4 py-3 text-gray-600">{{ u.most_common_type }}</td>
-        <td class="px-4 py-3 text-gray-600">{{ u.first_used }}</td>
       </tr>
       {# Expansion row — hidden until clicked. Same compact run table as /history. #}
       <tr class="user-detail-row hidden" data-user-idx="{{ loop.index0 }}">
-        <td colspan="6" class="bg-gray-50 px-4 py-4">
+        <td colspan="5" class="bg-gray-50 px-4 py-4">
           {% if u.runs %}
           <div class="card overflow-hidden">
             <table class="w-full text-[13px]" style="table-layout: fixed;">
