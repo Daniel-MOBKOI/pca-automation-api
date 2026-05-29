@@ -184,6 +184,10 @@ function makeEoc(file) {
     execSummary: '',
     execVariantIndex: 0,
     execUserEdited: false,
+    // fromClaude: true when the current text in execSummary came from the
+    // Claude API. Used to render the "✨ Claude" pill. Goes false whenever
+    // we fall back to JS templates or the user edits the textarea.
+    fromClaude: false,
     noDataSections: new Set(),
     _sectionsInitialised: false,
   };
@@ -297,7 +301,15 @@ async function validateEoc(eoc) {
     if (!res.ok) { const err = await res.json().catch(() => ({ detail: 'Validation failed' })); throw new Error(err.detail || 'Validation failed'); }
     eoc.validation = await res.json();
     eoc.status = 'ok';
-    eoc.execSummary = eoc.validation.claude_exec_summary || buildExecSummary(eoc.validation, 0);
+    // If Claude wrote the summary, use it and flag the pill. Otherwise
+    // fall back to the JS template and clear the flag.
+    if (eoc.validation.claude_exec_summary) {
+      eoc.execSummary = eoc.validation.claude_exec_summary;
+      eoc.fromClaude = true;
+    } else {
+      eoc.execSummary = buildExecSummary(eoc.validation, 0);
+      eoc.fromClaude = false;
+    }
     eoc.execVariantIndex = 0; eoc.execUserEdited = false;
     computeNoDataSections(eoc);
     state.generationStart = Date.now();
@@ -441,7 +453,7 @@ function renderActivePanel() {
         <div class="flex items-center justify-between mb-2">
           <div class="text-sm font-medium">Executive Summary</div>
           <div class="flex gap-3 items-center">
-            ${eoc.validation && eoc.validation.claude_exec_summary ? `<span class="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">✦ Claude</span>` : ''}
+            ${eoc.fromClaude && !eoc.execUserEdited ? `<span class="claude-pill text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">✨ Claude</span>` : ''}
             <button class="text-xs text-blue-600 hover:underline" onclick="onRegenerateClick(${idx})">
               <svg class="inline w-3.5 h-3.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
               Regenerate
@@ -505,6 +517,10 @@ function onExecInput(idx, ta) {
   if (labelEl) { labelEl.className = atLimit ? 'exec-count-overlimit' : ''; }
   ta.classList.toggle('exec-ta-overlimit', atLimit);
   if (hintEl) hintEl.textContent = '· edited';
+  // Hide the "✨ Claude" pill once the user has edited the text — it's
+  // no longer Claude's words. Pill comes back if they click Regenerate.
+  const pill = document.querySelector('.claude-pill');
+  if (pill) pill.remove();
 }
 
 function onRegenerateClick(idx) {
@@ -538,8 +554,6 @@ async function doRegenerate(idx) {
   if (spinner) spinner.classList.add('visible');
   if (ta) { ta.value = ''; ta.disabled = true; }
 
-  let fromClaude = false;
-
   try {
     const res = await fetch('/api/exec-summary', {
       method: 'POST',
@@ -550,22 +564,42 @@ async function doRegenerate(idx) {
     if (data.summary) {
       eoc.execSummary = data.summary;
       eoc.execVariantIndex = 0;
-      fromClaude = true;
+      eoc.fromClaude = true;
     } else {
       eoc.execVariantIndex = (eoc.execVariantIndex + 1) % 3;
       eoc.execSummary = buildExecSummary(eoc.validation, eoc.execVariantIndex);
+      eoc.fromClaude = false;
     }
   } catch (_) {
     eoc.execVariantIndex = (eoc.execVariantIndex + 1) % 3;
     eoc.execSummary = buildExecSummary(eoc.validation, eoc.execVariantIndex);
+    eoc.fromClaude = false;
   }
 
   // Hide spinner, re-enable textarea
   if (spinner) spinner.classList.remove('visible');
   if (ta) ta.disabled = false;
 
-  // Update hint
-  if (hintEl) hintEl.textContent = fromClaude ? '· Claude' : getVariantHint(eoc);
+  // Toggle the "✨ Claude" pill in the header — it lives in the same row
+  // as the Regenerate button. Find it by looking inside the parent of
+  // the Regenerate button so we don't need to re-render the whole panel.
+  const headerRow = document.querySelector('.exec-ta-wrap')?.previousElementSibling;
+  if (headerRow) {
+    const existing = headerRow.querySelector('.claude-pill');
+    if (eoc.fromClaude && !existing) {
+      const pill = document.createElement('span');
+      pill.className = 'claude-pill text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full';
+      pill.textContent = '✨ Claude';
+      // Insert before the Regenerate button so the pill appears to its left
+      const regenBtn = headerRow.querySelector('button');
+      if (regenBtn) regenBtn.parentNode.insertBefore(pill, regenBtn);
+    } else if (!eoc.fromClaude && existing) {
+      existing.remove();
+    }
+  }
+
+  // Update hint (just '· edited' or empty — no rotation labels anymore)
+  if (hintEl) hintEl.textContent = getVariantHint(eoc);
 
   // Type the text into the textarea character by character
   if (ta) {
@@ -602,9 +636,11 @@ function eocLabel(eoc) {
 }
 
 function getVariantHint(eoc) {
+  // Hint text shown after the character count. Simplified: just shows
+  // '· edited' when the user has typed. The "✨ Claude" indication lives
+  // in the pill next to Regenerate, not here.
   if (eoc.execUserEdited) return '· edited';
-  if (eoc.validation && eoc.validation.claude_exec_summary && eoc.execVariantIndex === 0) return '· Claude';
-  return `· ${['Performance-led','Brand-led','Concise'][eoc.execVariantIndex]||''}`;
+  return '';
 }
 
 // ============================================================
