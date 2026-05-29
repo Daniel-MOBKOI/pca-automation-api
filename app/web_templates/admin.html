@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}Team Activity{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-semibold">Team Activity</h1>
+    <p class="text-sm text-gray-500 mt-1">Overview of PCA usage across all users. Click a row to see that user's history.</p>
+  </div>
+  <a href="/app" class="btn-primary">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    New PCA
+  </a>
+</div>
+
+{# Headline stats — quick at-a-glance numbers #}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+  <div class="card p-4">
+    <div class="text-xs text-gray-500 uppercase tracking-wide font-medium mb-1">Total PCAs</div>
+    <div class="text-2xl font-semibold text-gray-900">{{ headline_stats.total_pcas }}</div>
+  </div>
+  <div class="card p-4">
+    <div class="text-xs text-gray-500 uppercase tracking-wide font-medium mb-1">Active Users</div>
+    <div class="text-2xl font-semibold text-gray-900">{{ headline_stats.active_users_total }}</div>
+  </div>
+  <div class="card p-4">
+    <div class="text-xs text-gray-500 uppercase tracking-wide font-medium mb-1">Active This Week</div>
+    <div class="text-2xl font-semibold text-gray-900">{{ headline_stats.active_users_week }}</div>
+  </div>
+  <div class="card p-4">
+    <div class="text-xs text-gray-500 uppercase tracking-wide font-medium mb-1">PCAs This Week</div>
+    <div class="text-2xl font-semibold text-gray-900">{{ headline_stats.pcas_this_week }}</div>
+  </div>
+</div>
+
+{% if not user_summaries %}
+<div class="card-elev p-12 text-center">
+  <p class="text-gray-700 font-medium">No Activity Yet</p>
+  <p class="text-sm text-gray-500 mt-1">Once users start generating PCAs, you'll see their activity here.</p>
+</div>
+{% else %}
+
+<div class="card-elev overflow-hidden">
+  <table class="w-full text-[13px]" style="table-layout: fixed;">
+    <colgroup>
+      <col style="width: 36px;" />
+      <col />
+      <col style="width: 110px;" />
+      <col style="width: 140px;" />
+      <col style="width: 180px;" />
+      <col style="width: 110px;" />
+    </colgroup>
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr class="text-left text-gray-600 text-xs uppercase tracking-wide">
+        <th class="px-3 py-2.5 font-medium"></th>
+        <th class="px-4 py-2.5 font-medium">User</th>
+        <th class="px-4 py-2.5 font-medium">Total PCAs</th>
+        <th class="px-4 py-2.5 font-medium">Last Active</th>
+        <th class="px-4 py-2.5 font-medium">Most Common Type</th>
+        <th class="px-4 py-2.5 font-medium">First Used</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for u in user_summaries %}
+      {# Each user gets two <tr>s: a summary row + a hidden expansion row.
+         Clicking the summary row toggles the expansion. #}
+      <tr class="user-summary-row hover:bg-gray-50 transition-colors cursor-pointer" data-user-idx="{{ loop.index0 }}">
+        <td class="px-3 py-3 text-gray-400">
+          <svg class="chev w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
+          </svg>
+        </td>
+        <td class="px-4 py-3">
+          <div class="flex items-center gap-2.5">
+            {% if u.picture %}
+              <img src="{{ u.picture }}" class="w-7 h-7 rounded-full flex-shrink-0" alt="" />
+            {% else %}
+              <div class="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-medium text-gray-600 flex-shrink-0">
+                {{ u.email[:1]|upper }}
+              </div>
+            {% endif %}
+            <div class="min-w-0">
+              <div class="font-medium text-gray-900 truncate">{{ u.name }}</div>
+              <div class="text-xs text-gray-500 truncate">{{ u.email }}</div>
+            </div>
+          </div>
+        </td>
+        <td class="px-4 py-3 font-medium text-gray-900">{{ u.total_pcas }}</td>
+        <td class="px-4 py-3 text-gray-600">{{ u.last_active }}</td>
+        <td class="px-4 py-3 text-gray-600">{{ u.most_common_type }}</td>
+        <td class="px-4 py-3 text-gray-600">{{ u.first_used }}</td>
+      </tr>
+      {# Expansion row — hidden until clicked. Same compact run table as /history. #}
+      <tr class="user-detail-row hidden" data-user-idx="{{ loop.index0 }}">
+        <td colspan="6" class="bg-gray-50 px-4 py-4">
+          {% if u.runs %}
+          <div class="card overflow-hidden">
+            <table class="w-full text-[13px]" style="table-layout: fixed;">
+              <colgroup>
+                <col style="width: 95px;" />
+                <col />
+                <col style="width: 165px;" />
+                <col style="width: 75px;" />
+                <col style="width: 215px;" />
+              </colgroup>
+              <thead class="bg-white border-b border-gray-200">
+                <tr class="text-left text-gray-600 text-xs uppercase tracking-wide">
+                  <th class="px-4 py-2 font-medium">When</th>
+                  <th class="px-4 py-2 font-medium">EOC File</th>
+                  <th class="px-4 py-2 font-medium">Type</th>
+                  <th class="px-4 py-2 font-medium">Status</th>
+                  <th class="px-4 py-2 font-medium">Downloads</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100 bg-white">
+                {% for run in u.runs %}
+                {% set type_display = {'one_pager': 'One Pager', 'slide_deck': 'Slide Deck', 'both': 'One Pager + Slide Deck'}.get(run.output_type, run.output_type) %}
+                <tr class="hover:bg-gray-50 transition-colors">
+                  <td class="px-4 py-2 text-gray-600 whitespace-nowrap">{{ run.created_at[:10] }}</td>
+                  <td class="px-4 py-2 font-medium truncate" title="{{ run.eoc_filename or '' }}">{{ run.eoc_filename or '—' }}</td>
+                  <td class="px-4 py-2 text-gray-600 whitespace-nowrap">{{ type_display }}</td>
+                  <td class="px-4 py-2">
+                    {% if run.status == 'completed' %}
+                      <span class="inline-flex items-center gap-1 text-green-700 bg-green-100 text-[11px] px-2 py-0.5 rounded-full font-medium">
+                        <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+                        Done
+                      </span>
+                    {% else %}
+                      <span class="inline-flex items-center text-red-700 bg-red-100 text-[11px] px-2 py-0.5 rounded-full font-medium">Failed</span>
+                    {% endif %}
+                  </td>
+                  <td class="px-4 py-2 text-left">
+                    {% if run.one_pager_filename or run.deck_filename %}
+                      <div class="flex gap-1.5 items-center whitespace-nowrap">
+                        {% if run.one_pager_filename %}
+                        <a href="/files/{{ run.one_pager_filename }}" class="btn-sm whitespace-nowrap" style="padding: 4px 10px; font-size: 12px;">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                          One Pager
+                        </a>
+                        {% endif %}
+                        {% if run.deck_filename %}
+                        <a href="/files/{{ run.deck_filename }}" class="btn-sm whitespace-nowrap" style="padding: 4px 10px; font-size: 12px;">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                          Slide Deck
+                        </a>
+                        {% endif %}
+                      </div>
+                    {% elif run.status == 'completed' %}
+                      <span class="text-xs text-gray-400">Expired</span>
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="text-sm text-gray-500 italic">No runs yet.</p>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+// Toggle the detail row when a user summary row is clicked.
+// Chevron rotates 90deg to indicate expanded state.
+document.querySelectorAll('.user-summary-row').forEach(row => {
+  row.addEventListener('click', () => {
+    const idx = row.dataset.userIdx;
+    const detail = document.querySelector(`.user-detail-row[data-user-idx="${idx}"]`);
+    const chev = row.querySelector('.chev');
+    if (!detail) return;
+    const isOpen = !detail.classList.contains('hidden');
+    detail.classList.toggle('hidden');
+    chev.style.transform = isOpen ? '' : 'rotate(90deg)';
+  });
+});
+</script>
+
+{% endif %}
+
+{% endblock %}
