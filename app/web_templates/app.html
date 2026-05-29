@@ -189,11 +189,8 @@
 
 <!-- STEP 4: Generating -->
 <section id="step-4" class="card-elev p-10 hidden">
-  <div class="flex items-baseline justify-between mb-1">
-    <h2 class="text-xl font-semibold">Building Your PCA</h2>
-    <div id="elapsed-timer" class="text-sm text-gray-500 font-medium font-mono">0:00</div>
-  </div>
-  <p class="text-sm text-gray-500 mb-6">This usually takes around 30 seconds.</p>
+  <h2 class="text-xl font-semibold mb-1">Building Your PCA</h2>
+  <p class="text-sm text-gray-500 mb-6">Hang tight, this'll just take a moment.</p>
   <div id="progress-list" class="space-y-2"></div>
 </section>
 
@@ -247,20 +244,16 @@ const state = {
   execVariantIndex: 0,
   execVariantCount: 3,
   execUserEdited: false,
-  // Tab title + elapsed timer state
-  defaultTitle: document.title,
-  elapsedInterval: null,
-  elapsedStart: null,
-  // Tracks which section IDs the current EOC has no data for
+  // Silent timer: tracks generation duration for the Done screen only.
+  // No visible elapsed counter, no tab title status — generation is fast
+  // enough (~2s) that those felt like noise. We keep the start time so the
+  // Done screen can still show "Built in X:XX".
+  generationStart: null,
   noDataSections: new Set(),
 };
 
 const DEFAULT_SELECTED_SECTIONS = new Set(['TITLE_PERFORMANCE']);
 
-// Map section IDs -> the summary_inputs keys we'd expect them to need.
-// If none of these keys have data, we flag the section as "Not enough data".
-// Note: this is a heuristic — we err on the side of showing data exists
-// rather than hiding it incorrectly.
 const SECTION_DATA_REQUIREMENTS = {
   'MARKET_PERFORMANCE': [
     'top_ctr_markets', 'top_ctr_market', 'top_markets_ctr', 'market_top_ctr',
@@ -296,19 +289,10 @@ function resetAll() {
   state.outputType = 'one_pager';
   state.deckMode = 'matching';
   state.noDataSections = new Set();
+  state.generationStart = null;
   document.getElementById('file-input').value = '';
   document.getElementById('exec-summary-input').value = '';
-  setTabTitle('default');
   goToStep(1);
-}
-
-// ----- Tab title status -----
-function setTabTitle(mode) {
-  // mode: 'default' | 'generating' | 'done'
-  const base = state.defaultTitle.replace(/^[\(\.\w✓\s]+\)\s*/, '');
-  if (mode === 'generating') document.title = `(…) ${base}`;
-  else if (mode === 'done')   document.title = `(✓) ${base}`;
-  else                         document.title = base;
 }
 
 // ----- Step 1: Upload -----
@@ -355,10 +339,6 @@ async function handleFile(file) {
   }
 }
 
-/**
- * Inspect the validation result and figure out which sections lack the
- * data they'd need to render meaningfully. Stored as a Set of section IDs.
- */
 function computeNoDataSections() {
   state.noDataSections = new Set();
   const inputs = (state.validation && state.validation.summary_inputs) || {};
@@ -452,10 +432,7 @@ function joinMetrics(arr) {
   return `, with ${list.join(', ')} and ${last}`;
 }
 
-// ----- Regenerate flow with edit warning -----
-
 function onRegenerateClick() {
-  // If user has edits, show warning modal first. Otherwise regenerate immediately.
   if (state.execUserEdited) {
     document.getElementById('regen-warning-modal').classList.remove('hidden');
   } else {
@@ -492,7 +469,7 @@ function updateVariantHint() {
   }
 }
 
-// ----- Step 2: Review (renderers — unchanged from v6) -----
+// ----- Step 2: Review (renderers — unchanged) -----
 
 function compactDateRange(s) {
   if (!s || typeof s !== 'string') return s;
@@ -977,27 +954,9 @@ function updateConditionalUI() {
 
 // ----- Step 4 + 5: Generate -----
 
-function startElapsedTimer() {
-  state.elapsedStart = Date.now();
-  state.elapsedInterval = setInterval(() => {
-    const elapsed = Math.floor((Date.now() - state.elapsedStart) / 1000);
-    const mm = Math.floor(elapsed / 60);
-    const ss = String(elapsed % 60).padStart(2, '0');
-    document.getElementById('elapsed-timer').textContent = `${mm}:${ss}`;
-  }, 250);
-}
-
-function stopElapsedTimer() {
-  if (state.elapsedInterval) {
-    clearInterval(state.elapsedInterval);
-    state.elapsedInterval = null;
-  }
-}
-
 async function startGeneration() {
   goToStep(4);
-  setTabTitle('generating');
-  startElapsedTimer();
+  state.generationStart = Date.now();  // silent — only used for Done screen total
 
   const list = document.getElementById('progress-list');
   const steps = [
@@ -1042,12 +1001,8 @@ async function startGeneration() {
     }
     const data = await res.json();
     markStep(steps.length - 1, 'done');
-    stopElapsedTimer();
-    setTabTitle('done');
     setTimeout(() => showDone(data), 500);
   } catch (err) {
-    stopElapsedTimer();
-    setTabTitle('default');
     list.insertAdjacentHTML('beforeend',
       `<div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">⚠ ${escapeHtml(err.message)}</div>
        <button class="btn-ghost mt-4" onclick="goToStep(3)">← Try again</button>`);
@@ -1064,8 +1019,10 @@ function markStep(i, status) {
 
 function showDone(data) {
   goToStep(5);
-  const totalSec = state.elapsedStart
-    ? Math.floor((Date.now() - state.elapsedStart) / 1000)
+
+  // Total time from "Generate" click → Done screen
+  const totalSec = state.generationStart
+    ? Math.floor((Date.now() - state.generationStart) / 1000)
     : 0;
   const timeStr = totalSec
     ? `Built in ${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')} · `
@@ -1100,9 +1057,6 @@ function showDone(data) {
       </a>`);
   }
 }
-
-// Reset tab title if user navigates away while generating
-window.addEventListener('beforeunload', () => stopElapsedTimer());
 </script>
 
 {% endblock %}
