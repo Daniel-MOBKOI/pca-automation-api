@@ -22,7 +22,6 @@
   }
   body { font-family: 'Inter', system-ui, sans-serif; color: var(--text-primary); }
 
-  /* Buttons */
   .btn-primary {
     background: var(--accent); color: white; padding: 10px 18px;
     border-radius: 8px; font-weight: 500; transition: background .15s, transform .05s;
@@ -49,7 +48,6 @@
   }
   .btn-sm.btn-sm-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 
-  /* Cards */
   .card { background: var(--surface); border-radius: 14px; border: 1px solid var(--border); }
   .card-elev {
     background: var(--surface); border-radius: 14px;
@@ -57,17 +55,14 @@
     box-shadow: 0 1px 2px rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.03);
   }
 
-  /* Stepper */
   .step-dot { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 500; flex-shrink: 0; }
   .step-dot.done { background: #10b981; color: white; }
   .step-dot.active { background: var(--accent); color: white; }
   .step-dot.pending { background: #e5e7eb; color: #6b7280; }
 
-  /* Dropzone */
   .drop-zone { border: 2px dashed var(--border-strong); transition: all .15s; background: var(--surface-muted); }
   .drop-zone.dragover { border-color: var(--accent); background: #eff6ff; }
 
-  /* Section chips (customise screen) */
   .section-chip {
     border: 1.5px solid var(--border); border-radius: 10px;
     padding: 12px 14px; cursor: pointer; transition: all .15s; background: white;
@@ -76,6 +71,23 @@
   .section-chip:hover { border-color: var(--border-strong); }
   .section-chip.selected { border-color: var(--accent); background: #eff6ff; }
   .section-chip.required { background: #f9fafb; cursor: not-allowed; }
+  .section-chip.no-data {
+    background: #fafafa;
+    border-color: #e5e7eb;
+  }
+  .section-chip.no-data .label-text { color: var(--text-tertiary); }
+  .section-chip .no-data-badge {
+    margin-left: auto;
+    font-size: 10px;
+    background: #f3f4f6;
+    color: var(--text-secondary);
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
   .output-chip {
     border: 1.5px solid var(--border); border-radius: 10px;
     padding: 16px 14px; cursor: pointer; transition: all .15s; background: white;
@@ -85,7 +97,6 @@
   .output-chip.selected { border-color: var(--accent); background: #eff6ff; }
   .output-chip.selected svg { color: var(--accent) !important; }
 
-  /* ----- Review screen typography hierarchy ----- */
   .section-title {
     font-size: 13px;
     font-weight: 600;
@@ -115,7 +126,6 @@
     overflow-wrap: break-word;
   }
 
-  /* Top performers: single grey container wrapping a 3-column grid */
   .top-wrap {
     background: var(--surface-muted);
     border-radius: 10px;
@@ -140,7 +150,6 @@
   .top-col .row .name { color: var(--text-primary); font-weight: 500; }
   .top-col .row .val { color: var(--text-secondary); font-variant-numeric: tabular-nums; font-weight: 500; padding-left: 8px; }
 
-  /* Disclosure */
   .disclosure { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   .disclosure summary { padding: 12px 16px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--text-primary); user-select: none; list-style: none; transition: background .15s; }
   .disclosure summary::-webkit-details-marker { display: none; }
@@ -150,7 +159,6 @@
   .disclosure[open] summary { border-bottom: 1px solid var(--border); background: var(--surface-muted); }
   .disclosure .body { padding: 18px 20px; background: white; }
 
-  /* Validation report */
   .vr h4 {
     font-size: 11px;
     font-weight: 600;
@@ -171,7 +179,18 @@
   .vr-top-col h5 { font-size: 10px; font-weight: 600; color: var(--text-tertiary); margin: 0 0 6px; letter-spacing: 0.06em; text-transform: uppercase; }
   .vr-top-col .vr-top-row { font-size: 13px; color: var(--text-primary); padding: 3px 0; }
 
-  /* Animations */
+  /* Modal (used for inline edit warning) */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(15, 23, 42, 0.4);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 50;
+  }
+  .modal-card {
+    background: white; border-radius: 14px; padding: 24px;
+    max-width: 420px; width: 90%;
+    box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+  }
+
   @keyframes spin { to { transform: rotate(360deg); } }
   .spinner { animation: spin 1s linear infinite; }
 </style>
@@ -197,7 +216,8 @@
     </div>
     {% else %}
     <div>
-      <a href="/web" class="text-sm text-gray-600 hover:text-gray-900">Sign in</a>
+      {# SNAG FIX: Sign In goes directly to /login (Google OAuth) instead of bouncing through /web #}
+      <a href="/login" class="text-sm text-gray-600 hover:text-gray-900">Sign in</a>
     </div>
     {% endif %}
   </div>
