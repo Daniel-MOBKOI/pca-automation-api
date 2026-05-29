@@ -23,13 +23,19 @@
 </div>
 {% else %}
 <div class="card-elev overflow-hidden">
+  {#
+    Column widths chosen so two buttons (One Pager + Slide Deck) fit on
+    one line in the rightmost column without overflowing the card.
+    "When" shrunk because it's now date-only.
+    "EOC File" is the flex column — it gets whatever's left.
+  #}
   <table class="w-full text-[13px]" style="table-layout: fixed;">
     <colgroup>
-      <col style="width: 130px;" />
+      <col style="width: 95px;" />
       <col />
-      <col style="width: 180px;" />
-      <col style="width: 90px;" />
-      <col style="width: 210px;" />
+      <col style="width: 165px;" />
+      <col style="width: 75px;" />
+      <col style="width: 215px;" />
     </colgroup>
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr class="text-left text-gray-600 text-xs uppercase tracking-wide">
@@ -37,7 +43,6 @@
         <th class="px-4 py-2.5 font-medium">EOC File</th>
         <th class="px-4 py-2.5 font-medium">Type</th>
         <th class="px-4 py-2.5 font-medium">Status</th>
-        {# SNAG FIX: Downloads header now left-aligned to match buttons below #}
         <th class="px-4 py-2.5 font-medium">Downloads</th>
       </tr>
     </thead>
@@ -45,7 +50,8 @@
       {% for run in runs %}
       {% set type_display = {'one_pager': 'One Pager', 'slide_deck': 'Slide Deck', 'both': 'One Pager + Slide Deck'}.get(run.output_type, run.output_type) %}
       <tr class="hover:bg-gray-50 transition-colors">
-        <td class="px-4 py-2.5 text-gray-600 whitespace-nowrap">{{ run.created_at[:16].replace('T', ' ') }}</td>
+        {# Date only (no time). Stored timestamps are ISO 8601 — first 10 chars = YYYY-MM-DD. #}
+        <td class="px-4 py-2.5 text-gray-600 whitespace-nowrap">{{ run.created_at[:10] }}</td>
         <td class="px-4 py-2.5 font-medium truncate" title="{{ run.eoc_filename or '' }}">{{ run.eoc_filename or '—' }}</td>
         <td class="px-4 py-2.5 text-gray-600 whitespace-nowrap">{{ type_display }}</td>
         <td class="px-4 py-2.5">
@@ -58,7 +64,7 @@
             <span class="inline-flex items-center text-red-700 bg-red-100 text-[11px] px-2 py-0.5 rounded-full font-medium">Failed</span>
           {% endif %}
         </td>
-        <td class="px-4 py-2.5">
+        <td class="px-4 py-2.5 text-left">
           {% if run.one_pager_filename or run.deck_filename %}
             <div class="flex gap-1.5 items-center whitespace-nowrap">
               {% if run.one_pager_filename %}
