@@ -614,14 +614,17 @@ async function typeIntoTextarea(ta, text, idx) {
   const labelEl = document.getElementById('summary-count-label');
   const delay = ms => new Promise(r => setTimeout(r, ms));
 
-  for (let i = 0; i < text.length; i++) {
+  const words = text.split(' ');
+  let built = '';
+  for (let i = 0; i < words.length; i++) {
     // Stop early if the user has switched tabs or started typing
     if (state.activeTab !== idx) { ta.value = text; break; }
-    ta.value = text.slice(0, i + 1);
-    if (countEl) countEl.textContent = ta.value.length;
-    // Vary speed slightly for a natural feel; punctuation pauses briefly
-    const ch = text[i];
-    const ms = (ch === '.' || ch === ',') ? 35 : 18;
+    built += (i === 0 ? '' : ' ') + words[i];
+    ta.value = built;
+    if (countEl) countEl.textContent = built.length;
+    // Pause slightly longer after sentence-ending words for a natural rhythm
+    const lastChar = words[i].slice(-1);
+    const ms = (lastChar === '.' || lastChar === '!' || lastChar === '?') ? 180 : 100;
     await delay(ms);
   }
   // Ensure final state is always correct
