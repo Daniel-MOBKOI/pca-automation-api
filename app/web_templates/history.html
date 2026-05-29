@@ -37,7 +37,8 @@
         <th class="px-4 py-2.5 font-medium">EOC File</th>
         <th class="px-4 py-2.5 font-medium">Type</th>
         <th class="px-4 py-2.5 font-medium">Status</th>
-        <th class="px-4 py-2.5 font-medium text-right">Downloads</th>
+        {# SNAG FIX: Downloads header now left-aligned to match buttons below #}
+        <th class="px-4 py-2.5 font-medium">Downloads</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
@@ -57,9 +58,9 @@
             <span class="inline-flex items-center text-red-700 bg-red-100 text-[11px] px-2 py-0.5 rounded-full font-medium">Failed</span>
           {% endif %}
         </td>
-        <td class="px-4 py-2.5 text-right">
+        <td class="px-4 py-2.5">
           {% if run.one_pager_filename or run.deck_filename %}
-            <div class="flex gap-1.5 justify-end items-center whitespace-nowrap">
+            <div class="flex gap-1.5 items-center whitespace-nowrap">
               {% if run.one_pager_filename %}
               <a href="/files/{{ run.one_pager_filename }}" class="btn-sm whitespace-nowrap" style="padding: 4px 10px; font-size: 12px;">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
