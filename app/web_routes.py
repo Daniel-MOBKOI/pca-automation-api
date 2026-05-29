@@ -5,13 +5,13 @@ Web-app endpoints for the PCA Automation Generator.
 
 Lives at: app/web_routes.py (alongside app/main.py)
 
-v6 changes:
-- Claude API exec summary: /api/validate now calls Anthropic claude-haiku-4-5
-  to write a human-narrative exec summary from validated campaign data.
-  Result is capped at 550 characters and returned as `claude_exec_summary`.
-  Falls back silently to None if key is missing or call fails.
-- Batch upload: /api/generate is unchanged — frontend calls it once per EOC
-  in parallel. No backend changes needed for batch.
+v5 changes:
+- /logout now redirects to /web (not /, which is owned by main.py for the
+  legacy GPT health endpoint and returns JSON)
+- Smart filename renaming: generated .pptx files are renamed to
+  <CampaignName>_<Type>_<DDMMYY>.pptx so users can recognise them in
+  their Downloads folder. The rename happens after main.py writes the
+  file but before we store the path in the database.
 """
 
 from __future__ import annotations
@@ -28,8 +28,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import httpx
-from authlib.integrations.starlette_client import OAuth, OAuthError
 from fastapi import (
     APIRouter,
     Depends,
@@ -40,10 +38,13 @@ from fastapi import (
     Request,
     UploadFile,
 )
+import httpx
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.sessions import SessionMiddleware
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+EXEC_SUMMARY_MAX_CHARS = 550
 
 
 # ----- Paths ----------------------------------------------------------------
@@ -64,9 +65,6 @@ FILE_RETENTION_DAYS = int(os.getenv("FILE_RETENTION_DAYS", "30"))
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 
 PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-EXEC_SUMMARY_MAX_CHARS = 550
 
 
 # ----- Database -------------------------------------------------------------
@@ -209,6 +207,10 @@ def _safe_filename_part(s: str, max_len: int = 60) -> str:
       - collapse repeated underscores
       - trim leading/trailing underscores
       - cap length
+    Examples:
+      "Prada Eyewear FW25"          -> "Prada_Eyewear_FW25"
+      "Rolex The Oscars UK 2026"    -> "Rolex_The_Oscars_UK_2026"
+      "Church's - SS26"             -> "Church_s_SS26"
     """
     if not s:
         return "PCA"
@@ -223,6 +225,7 @@ def _smart_filename(campaign_name: str, doc_type: str) -> str:
         <CampaignName>_<Type>_<DDMMYY>.pptx
     e.g. Prada_Eyewear_FW25_One_Pager_290526.pptx
     """
+    # Daniel's preferred date format is DDMMYY (no separators)
     date_part = datetime.utcnow().strftime("%d%m%y")
     name = _safe_filename_part(campaign_name or "PCA")
     return f"{name}_{doc_type}_{date_part}.pptx"
@@ -231,13 +234,16 @@ def _smart_filename(campaign_name: str, doc_type: str) -> str:
 def _rename_generated_file(original_filename: str, new_filename: str) -> str:
     """
     Rename a freshly-generated file in GENERATED_FILES_DIR.
-    Falls back to the original filename if the rename fails.
+    Falls back to the original filename if the rename fails (e.g. collision)
+    so the user always gets a working download even if naming is imperfect.
     """
     try:
         src = GENERATED_FILES_DIR / Path(original_filename).name
         if not src.exists():
             return Path(original_filename).name
 
+        # Avoid collisions if a file with the same target name already exists
+        # (e.g. two PCAs generated in the same minute for the same campaign).
         dst = GENERATED_FILES_DIR / new_filename
         if dst.exists() and src != dst:
             stem = dst.stem
@@ -260,27 +266,22 @@ def _rename_generated_file(original_filename: str, new_filename: str) -> str:
 
 
 def _truncate_to_sentence(text: str, max_chars: int) -> str:
-    """
-    Truncate text to at most max_chars characters, preferring to cut at a
-    sentence boundary so the result still reads naturally.
-    """
+    """Truncate to max_chars, preferring a sentence boundary."""
     if len(text) <= max_chars:
         return text
-    # Try to cut at the last sentence-ending punctuation within the limit
     chunk = text[:max_chars]
     for punct in ('. ', '! ', '? '):
         pos = chunk.rfind(punct)
         if pos > max_chars // 2:
             return chunk[:pos + 1].rstrip()
-    # No clean sentence boundary — hard truncate at last space
     pos = chunk.rfind(' ')
     return (chunk[:pos] if pos > 0 else chunk).rstrip()
 
 
 async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
     """
-    Call Claude claude-haiku-4-5 to write a natural exec summary paragraph.
-    Returns None on any failure so the frontend falls back to templates.
+    Call claude-haiku-4-5 to write a natural exec summary paragraph.
+    Returns None on any failure so callers can fall back to templates.
     Result is capped at EXEC_SUMMARY_MAX_CHARS (550) characters.
     """
     if not ANTHROPIC_API_KEY:
@@ -288,18 +289,18 @@ async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
 
     i = summary_inputs or {}
     data_lines = []
-    if i.get("campaign_name"):        data_lines.append(f"Campaign: {i['campaign_name']}")
-    if i.get("client"):               data_lines.append(f"Client: {i['client']}")
-    if i.get("markets"):              data_lines.append(f"Markets: {i['markets']}")
-    if i.get("live_dates"):           data_lines.append(f"Live dates: {i['live_dates']}")
-    if i.get("delivered_impressions"):data_lines.append(f"Delivered impressions: {i['delivered_impressions']}")
-    if i.get("ctr"):                  data_lines.append(f"CTR: {i['ctr']}")
-    if i.get("engagement_rate"):      data_lines.append(f"Engagement rate: {i['engagement_rate']}")
-    if i.get("vcr"):                  data_lines.append(f"VCR: {i['vcr']}")
-    if i.get("on_screen_rate"):       data_lines.append(f"On-screen rate: {i['on_screen_rate']}")
-    if i.get("budget"):               data_lines.append(f"Budget: {i['budget']}")
-    if i.get("delivery_incl_av"):     data_lines.append(f"Delivery incl. AV: {i['delivery_incl_av']}")
-    if i.get("added_value_worth"):    data_lines.append(f"Added value: {i['added_value_worth']}")
+    if i.get("campaign_name"):         data_lines.append(f"Campaign: {i['campaign_name']}")
+    if i.get("client"):                data_lines.append(f"Client: {i['client']}")
+    if i.get("markets"):               data_lines.append(f"Markets: {i['markets']}")
+    if i.get("live_dates"):            data_lines.append(f"Live dates: {i['live_dates']}")
+    if i.get("delivered_impressions"): data_lines.append(f"Delivered impressions: {i['delivered_impressions']}")
+    if i.get("ctr"):                   data_lines.append(f"CTR: {i['ctr']}")
+    if i.get("engagement_rate"):       data_lines.append(f"Engagement rate: {i['engagement_rate']}")
+    if i.get("vcr"):                   data_lines.append(f"VCR: {i['vcr']}")
+    if i.get("on_screen_rate"):        data_lines.append(f"On-screen rate: {i['on_screen_rate']}")
+    if i.get("budget"):                data_lines.append(f"Budget: {i['budget']}")
+    if i.get("delivery_incl_av"):      data_lines.append(f"Delivery incl. AV: {i['delivery_incl_av']}")
+    if i.get("added_value_worth"):     data_lines.append(f"Added value: {i['added_value_worth']}")
 
     for key, label in [
         ("top_ctr",             "Top CTR titles"),
@@ -344,16 +345,16 @@ async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
         resp.raise_for_status()
         data = resp.json()
         text = data["content"][0]["text"].strip()
-        if not text:
-            return None
-        # Hard cap at 550 chars, cutting at a sentence boundary where possible
-        return _truncate_to_sentence(text, EXEC_SUMMARY_MAX_CHARS)
+        return _truncate_to_sentence(text, EXEC_SUMMARY_MAX_CHARS) if text else None
     except Exception:
         traceback.print_exc()
         return None
 
 
 # ----- Auth -----------------------------------------------------------------
+
+from authlib.integrations.starlette_client import OAuth, OAuthError
+from starlette.middleware.sessions import SessionMiddleware
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -434,6 +435,8 @@ async def auth_callback(request: Request):
 
 @router.get("/logout")
 async def logout(request: Request):
+    # SNAG FIX: redirect to /web (not /) so users see the landing page,
+    # not the legacy JSON health endpoint owned by main.py.
     request.session.clear()
     return RedirectResponse(url="/web")
 
@@ -530,8 +533,6 @@ async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
 
     compact = compact_parsed_result(parsed)
     summary_inputs = compact.get("summary_inputs") or {}
-
-    # Claude API exec summary — async, capped at 550 chars, None on failure
     claude_summary = await _claude_exec_summary(summary_inputs)
 
     return JSONResponse({
@@ -541,6 +542,20 @@ async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
         "claude_exec_summary": claude_summary,
         **compact,
     })
+
+
+@router.post("/api/exec-summary")
+async def api_exec_summary(request: Request):
+    """
+    Regenerate a Claude exec summary on demand.
+    Accepts JSON body: { "summary_inputs": { ... } }
+    Returns: { "summary": "..." } or { "summary": null } on failure.
+    """
+    require_user(request)
+    body = await request.json()
+    summary_inputs = body.get("summary_inputs") or {}
+    text = await _claude_exec_summary(summary_inputs)
+    return JSONResponse({"summary": text})
 
 
 @router.post("/api/generate")
@@ -595,6 +610,7 @@ async def api_generate(
         mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(exec_summary, mapped_values)
         summary_blob = compact_parsed_result(parsed)
 
+        # Pull campaign name from the parsed data for use in download filenames
         campaign_name = (
             (summary_blob.get("summary_inputs") or {}).get("campaign_name")
             or mapped_values.get("CAMPAIGN_NAME")
@@ -673,7 +689,7 @@ def _record_failed_run(run_id: str, email: str, filename: Optional[str], output_
                    (run_id, user_email, created_at, eoc_filename, output_type,
                     selected_sections, deck_mode, exec_summary,
                     one_pager_filename, deck_filename, summary_json, status)
-                   VALUES (?, ?, ?, '[]', '', '', NULL, NULL, '{}', 'failed')""",
+                   VALUES (?, ?, ?, ?, ?, '[]', '', '', NULL, NULL, '{}', 'failed')""",
                 (run_id, email, datetime.utcnow().isoformat(), filename, output_type),
             )
     except Exception:
