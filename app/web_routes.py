@@ -5,16 +5,14 @@ Web-app endpoints for the PCA Automation Generator.
 
 Lives at: app/web_routes.py (alongside app/main.py)
 
-v7 changes:
-- Split admin functionality into its own dedicated /admin route.
-  /history is back to being a simple per-user view (matches v5 behaviour).
-  /admin shows the team-wide per-user summary with expandable rows.
-- Non-admins who try to hit /admin directly get silently redirected to
-  /history (defence in depth — the UI also hides the link).
-- New admin.html template.
+v8 changes:
+- Admin per-user table now includes a `pcas_this_week` count per user.
+- Dropped `most_common_type` and `first_used` from the per-user summary
+  (always-"One Pager" / "interesting but not actionable").
 
 Earlier versions:
-- v6: admin-aware /history (replaced by this version's clean split)
+- v7: split /admin and /history into separate routes
+- v6: admin-aware /history (replaced by v7's clean split)
 - v5: /logout redirects to /web, smart filename renaming
 - v4: SessionMiddleware cleanup task started by middleware
 - v3: persistent SQLite + per-user history
@@ -32,7 +30,7 @@ import sqlite3
 import tempfile
 import traceback
 import uuid
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -257,9 +255,6 @@ APP_BASE_URL = os.getenv(
     "https://pca-modular-builder-v12.onrender.com",
 )
 
-# ADMIN_EMAILS is a comma-separated list of email addresses, e.g.
-#   ADMIN_EMAILS=daniel.crittenden@mobkoi.com,jane.doe@mobkoi.com
-# Comparison is case-insensitive; whitespace and empty entries are ignored.
 ADMIN_EMAILS = {
     e.strip().lower()
     for e in os.getenv("ADMIN_EMAILS", "").split(",")
@@ -301,14 +296,9 @@ router = APIRouter()
 templates = Jinja2Templates(directory=str(WEB_TEMPLATES_DIR))
 
 
-# ----- Template context injection -------------------------------------------
-#
-# Every page that renders base.html needs to know whether the current user
-# is an admin (so the nav can conditionally show the "Admin" link). Rather
-# than passing is_admin manually on every TemplateResponse, we provide a
-# small helper that all routes use.
-
 def _page_context(request: Request, **extra) -> Dict[str, Any]:
+    """Shared template context — always includes user + is_admin so the nav
+    can render the conditional Admin link on every page."""
     user = current_user(request)
     ctx: Dict[str, Any] = {
         "user": user,
@@ -385,10 +375,7 @@ async def app_page(request: Request):
 
 @router.get("/history")
 async def history_page(request: Request):
-    """
-    Always shows the logged-in user's OWN PCAs only.
-    Admins use /admin for the team-wide view.
-    """
+    """Always shows the logged-in user's OWN PCAs only."""
     user = current_user(request)
     if not user:
         return RedirectResponse(url="/web")
@@ -449,30 +436,29 @@ def _relative_time(iso_str: str) -> str:
         return iso_str[:10] if len(iso_str) >= 10 else iso_str
 
 
-# Friendly labels for output_type values stored in the DB.
-_OUTPUT_TYPE_LABELS = {
-    "one_pager": "One Pager",
-    "slide_deck": "Slide Deck",
-    "both": "One Pager + Slide Deck",
-}
-
-
-def _build_user_summaries(all_runs: List[sqlite3.Row]) -> List[Dict[str, Any]]:
+def _build_user_summaries(
+    all_runs: List[sqlite3.Row],
+    week_cutoff_iso: str,
+) -> List[Dict[str, Any]]:
     """
-    Group a flat list of run rows by user and compute per-user summary stats.
+    Group runs by user and build a summary dict per user.
+
+    week_cutoff_iso is the ISO timestamp for "7 days ago" — passed in by the
+    caller so we don't recompute it per-user, and so the headline stats
+    and the per-user counts use exactly the same cutoff.
 
     Each summary dict contains:
-        email, name, picture, total_pcas, last_active (relative),
-        last_active_iso (raw, used for sorting), most_common_type,
-        first_used (date only), and runs (full list for the expanded row).
+        email, name, picture, total_pcas, pcas_this_week,
+        last_active (relative string), last_active_iso (for sorting),
+        runs (full list for the expanded row).
 
-    Sorted by total_pcas DESC, then most recent activity as tiebreaker,
-    so the most prolific users surface at the top.
+    Sorted by total_pcas DESC, then most recent activity as tiebreaker.
     """
     grouped: Dict[str, List[sqlite3.Row]] = defaultdict(list)
     for row in all_runs:
         grouped[row["user_email"]].append(row)
 
+    # Look up display names/pictures from the users table in one query
     user_meta: Dict[str, Dict[str, Any]] = {}
     if grouped:
         with db_connect() as conn:
@@ -486,12 +472,10 @@ def _build_user_summaries(all_runs: List[sqlite3.Row]) -> List[Dict[str, Any]]:
 
     summaries = []
     for email, runs in grouped.items():
-        type_counter = Counter(r["output_type"] for r in runs if r["output_type"])
-        most_common_raw = type_counter.most_common(1)[0][0] if type_counter else None
-        most_common = _OUTPUT_TYPE_LABELS.get(most_common_raw, most_common_raw or "—")
+        # PCAs this week = runs whose created_at is on/after the week cutoff
+        pcas_this_week = sum(1 for r in runs if r["created_at"] >= week_cutoff_iso)
 
         last_active_iso = runs[0]["created_at"] if runs else None
-        first_used_iso = runs[-1]["created_at"] if runs else None
 
         meta = user_meta.get(email, {})
         summaries.append({
@@ -499,10 +483,9 @@ def _build_user_summaries(all_runs: List[sqlite3.Row]) -> List[Dict[str, Any]]:
             "name": meta.get("name") or email,
             "picture": meta.get("picture"),
             "total_pcas": len(runs),
+            "pcas_this_week": pcas_this_week,
             "last_active": _relative_time(last_active_iso),
             "last_active_iso": last_active_iso,
-            "most_common_type": most_common,
-            "first_used": first_used_iso[:10] if first_used_iso else "—",
             "runs": [dict(r) for r in runs],
         })
 
@@ -516,9 +499,8 @@ def _build_user_summaries(all_runs: List[sqlite3.Row]) -> List[Dict[str, Any]]:
 @router.get("/admin")
 async def admin_page(request: Request):
     """
-    Admin-only page showing per-user PCA activity across the whole team.
-    Non-admins (and unauthenticated visitors) get silently redirected to
-    /history — no scary error page, just sent to a place they can use.
+    Admin-only team activity page. Non-admins get silently redirected to
+    /history (defence in depth — the UI also hides the link).
     """
     user = current_user(request)
     if not user:
@@ -535,15 +517,16 @@ async def admin_page(request: Request):
                LIMIT 1000"""
         ).fetchall()
 
-    user_summaries = _build_user_summaries(rows)
+    # Shared "this week" cutoff used by both headline stats and per-user counts
+    week_cutoff_iso = (datetime.utcnow() - timedelta(days=7)).isoformat()
+
+    user_summaries = _build_user_summaries(rows, week_cutoff_iso)
 
     total_pcas = len(rows)
     active_user_count = len(user_summaries)
-
-    week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    recent_emails = {r["user_email"] for r in rows if r["created_at"] >= week_ago}
+    recent_emails = {r["user_email"] for r in rows if r["created_at"] >= week_cutoff_iso}
     active_this_week = len(recent_emails)
-    pcas_this_week = sum(1 for r in rows if r["created_at"] >= week_ago)
+    pcas_this_week = sum(1 for r in rows if r["created_at"] >= week_cutoff_iso)
 
     return templates.TemplateResponse(
         request,
