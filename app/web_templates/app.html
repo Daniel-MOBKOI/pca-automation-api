@@ -18,69 +18,28 @@
 <section id="step-1" class="card-elev p-10">
   <div class="text-center">
     <h2 class="text-2xl font-semibold text-gray-900">Let's build your PCA</h2>
-    <p class="mt-2 text-gray-600">Drop your end-of-campaign Excel file below and I'll handle the rest.</p>
+    <p class="mt-2 text-gray-600">Drop up to 3 end-of-campaign Excel files and I'll handle the rest.</p>
   </div>
   <div id="dropzone" class="drop-zone mt-8 rounded-xl p-12 text-center cursor-pointer">
-    <input type="file" id="file-input" accept=".xlsx,.xls" class="hidden" />
+    <input type="file" id="file-input" accept=".xlsx,.xls" multiple class="hidden" />
     <svg class="w-10 h-10 mx-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.9 5 5 0 019.9-1A5.5 5.5 0 0118.5 16H17m-7 4l3-3m0 0l3 3m-3-3v8"/></svg>
-    <p class="mt-3 font-medium text-gray-700">Drop your EOC file here</p>
-    <p class="text-sm text-gray-500">or click to browse · .xlsx, .xls</p>
+    <p class="mt-3 font-medium text-gray-700">Drop your EOC files here</p>
+    <p class="text-sm text-gray-500">or click to browse · .xlsx, .xls · max 3 files</p>
   </div>
-  <div id="upload-status" class="hidden mt-6 text-center text-sm text-gray-600"></div>
+  <div id="upload-list" class="mt-6 space-y-2 hidden"></div>
+  <div id="upload-error" class="hidden mt-4 text-center text-sm text-red-600"></div>
+  <div class="mt-6 flex justify-end hidden" id="step1-continue">
+    <button class="btn-primary" onclick="goToStep(2)">
+      Continue
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+    </button>
+  </div>
 </section>
 
 <!-- STEP 2: Review -->
-<section id="step-2" class="card-elev p-8 hidden">
-  <div class="flex items-center gap-3 mb-1">
-    <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-      <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
-    </div>
-    <h2 class="text-xl font-semibold">Got it — here's what I found</h2>
-  </div>
-  <p id="review-filename" class="text-sm text-gray-500 ml-11 mb-6"></p>
-
-  <div class="mb-5">
-    <h3 class="section-title">Campaign Overview</h3>
-    <div id="campaign-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
-  </div>
-
-  <div class="mb-5">
-    <h3 class="section-title">Performance Metrics</h3>
-    <div id="performance-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
-  </div>
-
-  <div class="mb-5">
-    <h3 class="section-title">Delivery &amp; Spend</h3>
-    <div id="delivery-tiles" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
-  </div>
-
-  <div class="mb-5" id="top-performers-section">
-    <h3 class="section-title">Top Performing Titles</h3>
-    <div class="top-wrap">
-      <div id="top-performers" class="top-grid"></div>
-    </div>
-  </div>
-
-  <div class="mb-6" id="top-markets-section">
-    <h3 class="section-title">Top Performing Markets</h3>
-    <div class="top-wrap">
-      <div id="top-markets" class="top-grid"></div>
-    </div>
-  </div>
-
-  <div id="review-warnings" class="mb-6"></div>
-
-  <details class="disclosure mb-6">
-    <summary>
-      <svg class="chev w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
-      <span>See Full Validation Report</span>
-    </summary>
-    <div class="body">
-      <div id="review-formatted" class="vr"></div>
-    </div>
-  </details>
-
-  <div class="flex justify-between">
+<section id="step-2" class="hidden">
+  <div id="review-cards" class="space-y-6"></div>
+  <div class="mt-6 flex justify-between">
     <button class="btn-ghost" onclick="goToStep(1)">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
       Start Over
@@ -93,95 +52,18 @@
 </section>
 
 <!-- STEP 3: Customise -->
-<section id="step-3" class="card-elev p-8 hidden">
-  <h2 class="text-xl font-semibold">A Few Choices to Make</h2>
-  <p class="text-sm text-gray-500 mt-1 mb-6">Defaults are sensible — skip what you don't need.</p>
-
-  <div class="mb-8">
-    <div class="text-sm font-medium mb-3">What Should I Build?</div>
-    <div class="grid grid-cols-3 gap-3">
-      <label class="output-chip selected" data-output="one_pager">
-        <input type="radio" name="output_type" value="one_pager" class="hidden" checked />
-        <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        <div class="text-sm mt-2 font-medium">One Pager</div>
-      </label>
-      <label class="output-chip" data-output="slide_deck">
-        <input type="radio" name="output_type" value="slide_deck" class="hidden" />
-        <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
-        <div class="text-sm mt-2">Full Deck</div>
-      </label>
-      <label class="output-chip" data-output="both">
-        <input type="radio" name="output_type" value="both" class="hidden" />
-        <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg>
-        <div class="text-sm mt-2">Both</div>
-      </label>
-    </div>
-  </div>
-
-  <div class="mb-8">
-    <div class="flex items-center justify-between mb-3">
-      <div class="text-sm font-medium" id="onepager-sections-label">One Pager Sections</div>
-      <div class="flex gap-2 text-xs">
-        <button class="text-blue-600 hover:underline" onclick="selectAllSections()">Select All</button>
-        <span class="text-gray-300">|</span>
-        <button class="text-blue-600 hover:underline" onclick="selectNoSections()">Clear</button>
-      </div>
-    </div>
-    <div id="sections-grid" class="grid grid-cols-2 gap-2"></div>
-  </div>
-
-  <div class="mb-6">
-    <div class="flex items-center justify-between mb-2">
-      <div class="text-sm font-medium">Executive Summary</div>
-      <div class="flex gap-3 items-center">
-        <button class="text-xs text-blue-600 hover:underline" onclick="onRegenerateClick()">
-          <svg class="inline w-3.5 h-3.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-          Regenerate
-        </button>
-      </div>
-    </div>
-    <textarea id="exec-summary-input" rows="5" maxlength="550"
-      class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-      placeholder="Pre-filled from your EOC. Edit if you'd like."></textarea>
-    <div class="text-xs text-gray-500 mt-1">
-      <span id="summary-count">0</span> / 550 characters
-      <span id="summary-variant-hint" class="ml-2 text-gray-400"></span>
-    </div>
-  </div>
-
-  <details id="advanced-options" class="bg-gray-50 rounded-lg p-4 hidden">
-    <summary class="cursor-pointer text-sm font-medium text-gray-700">Advanced Options</summary>
-    <div class="mt-4 space-y-3">
-      <div>
-        <label class="text-xs text-gray-600">Deck mode</label>
-        <select id="deck-mode" class="block w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm">
-          <option value="matching" selected>Matching (uses same sections as One Pager)</option>
-          <option value="full">Full (all available slides)</option>
-          <option value="custom">Custom (pick deck sections separately)</option>
-        </select>
-      </div>
-    </div>
-  </details>
-
-  <div id="custom-deck-section" class="mb-8 hidden mt-4">
-    <div class="flex items-center justify-between mb-3">
-      <div class="text-sm font-medium">Custom Slide Deck Sections</div>
-      <div class="flex gap-2 text-xs">
-        <button class="text-blue-600 hover:underline" onclick="selectAllDeckSections()">Select All</button>
-        <span class="text-gray-300">|</span>
-        <button class="text-blue-600 hover:underline" onclick="selectNoDeckSections()">Clear</button>
-      </div>
-    </div>
-    <div id="deck-sections-grid" class="grid grid-cols-2 gap-2"></div>
-  </div>
-
+<section id="step-3" class="hidden">
+  <!-- Tab bar — rendered by JS -->
+  <div id="customise-tabs" class="flex gap-1 mb-4 border-b border-gray-200"></div>
+  <!-- Tab panels — one per EOC, rendered by JS -->
+  <div id="customise-panels"></div>
   <div class="mt-8 flex justify-between">
     <button class="btn-ghost" onclick="goToStep(2)">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
       Back
     </button>
     <button class="btn-primary" onclick="startGeneration()">
-      Generate
+      Generate All
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
     </button>
   </div>
@@ -189,9 +71,9 @@
 
 <!-- STEP 4: Generating -->
 <section id="step-4" class="card-elev p-10 hidden">
-  <h2 class="text-xl font-semibold mb-1">Building Your PCA</h2>
+  <h2 class="text-xl font-semibold mb-1">Building Your PCAs</h2>
   <p class="text-sm text-gray-500 mb-6">Hang tight, this'll just take a moment.</p>
-  <div id="progress-list" class="space-y-2"></div>
+  <div id="progress-list" class="space-y-4"></div>
 </section>
 
 <!-- STEP 5: Done -->
@@ -199,11 +81,9 @@
   <div class="w-14 h-14 mx-auto bg-green-100 rounded-full flex items-center justify-center">
     <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
   </div>
-  <h2 class="mt-4 text-2xl font-semibold">Your PCA Is Ready</h2>
-  <p id="done-meta" class="mt-1 text-gray-500"></p>
-
-  <div id="done-downloads" class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-xl mx-auto"></div>
-
+  <h2 class="mt-4 text-2xl font-semibold">Your PCAs Are Ready</h2>
+  <p id="done-meta" class="mt-1 text-gray-500 text-sm"></p>
+  <div id="done-downloads" class="mt-8 text-left max-w-2xl mx-auto space-y-6"></div>
   <div class="mt-8 flex justify-center gap-3">
     <a href="/history" class="btn-ghost">View History</a>
     <button class="btn-primary" onclick="resetAll()">Build Another</button>
@@ -230,25 +110,37 @@
 </div>
 
 <script>
-// ----- State -----
+// ============================================================
+// STATE
+// Each EOC is stored as an object in state.eocs[].
+// Single-file flow = eocs of length 1 — same code paths.
+// ============================================================
 const state = {
   step: 1,
-  file: null,
-  validation: null,
-  sections: [],
-  outputType: 'one_pager',
-  selectedSections: new Set(),
-  selectedDeckSections: new Set(),
-  deckMode: 'matching',
-  execSummary: '',
-  execVariantIndex: 0,
-  execVariantCount: 3,
-  execUserEdited: false,
-  // Timer starts when the EOC upload completes (end of handleFile), so the
-  // Done screen reflects the full end-to-end time including review & customise.
+  eocs: [],          // array of per-EOC objects (see makeEoc)
+  sections: [],      // shared section registry
+  activeTab: 0,      // index of active customise tab
   generationStart: null,
-  noDataSections: new Set(),
+  regenTargetIdx: null,  // which eoc the regen modal is for
 };
+
+function makeEoc(file) {
+  return {
+    file,
+    validation: null,
+    status: 'pending',   // pending | validating | ok | error
+    errorMsg: '',
+    // per-EOC customise state
+    outputType: 'one_pager',
+    selectedSections: new Set(),
+    selectedDeckSections: new Set(),
+    deckMode: 'matching',
+    execSummary: '',
+    execVariantIndex: 0,
+    execUserEdited: false,
+    noDataSections: new Set(),
+  };
+}
 
 const DEFAULT_SELECTED_SECTIONS = new Set(['TITLE_PERFORMANCE']);
 
@@ -263,6 +155,9 @@ const SECTION_DATA_REQUIREMENTS = {
   ],
 };
 
+// ============================================================
+// NAVIGATION
+// ============================================================
 function goToStep(n) {
   state.step = n;
   for (let i = 1; i <= 5; i++) {
@@ -273,27 +168,36 @@ function goToStep(n) {
     else if (i === n) dot.classList.add('active');
     else dot.classList.add('pending');
   }
+
+  if (n === 2) renderAllReviews();
+  if (n === 3) renderCustomiseTabs();
+
+  // Tab title status
+  if (n === 4) document.title = '⏳ Building PCA… | PCA Generator';
+  else if (n === 5) document.title = '✅ PCA Ready | PCA Generator';
+  else document.title = 'Create PCA';
+
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function resetAll() {
-  state.file = null;
-  state.validation = null;
-  state.selectedSections = new Set();
-  state.selectedDeckSections = new Set();
-  state.execSummary = '';
-  state.execVariantIndex = 0;
-  state.execUserEdited = false;
-  state.outputType = 'one_pager';
-  state.deckMode = 'matching';
-  state.noDataSections = new Set();
+  state.eocs = [];
+  state.sections = [];
+  state.activeTab = 0;
   state.generationStart = null;
+  state.regenTargetIdx = null;
   document.getElementById('file-input').value = '';
-  document.getElementById('exec-summary-input').value = '';
+  document.getElementById('upload-list').innerHTML = '';
+  document.getElementById('upload-list').classList.add('hidden');
+  document.getElementById('upload-error').classList.add('hidden');
+  document.getElementById('step1-continue').classList.add('hidden');
+  document.title = 'Create PCA';
   goToStep(1);
 }
 
-// ----- Step 1: Upload -----
+// ============================================================
+// STEP 1 — Upload + validate
+// ============================================================
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('file-input');
 
@@ -303,20 +207,90 @@ dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover
 dropzone.addEventListener('drop', e => {
   e.preventDefault();
   dropzone.classList.remove('dragover');
-  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  handleFiles(Array.from(e.dataTransfer.files));
 });
 fileInput.addEventListener('change', e => {
-  if (e.target.files.length) handleFile(e.target.files[0]);
+  handleFiles(Array.from(e.target.files));
 });
 
-async function handleFile(file) {
-  state.file = file;
-  const statusEl = document.getElementById('upload-status');
-  statusEl.classList.remove('hidden');
-  statusEl.innerHTML = `<svg class="spinner inline-block w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="40 60"/></svg> Reading and validating ${escapeHtml(file.name)}…`;
+function showUploadError(msg) {
+  const el = document.getElementById('upload-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 4000);
+}
+
+async function handleFiles(files) {
+  const errEl = document.getElementById('upload-error');
+  errEl.classList.add('hidden');
+
+  // Filter to xlsx/xls only
+  const valid = files.filter(f => /\.(xlsx|xls)$/i.test(f.name));
+  if (valid.length === 0) { showUploadError('Please select .xlsx or .xls files.'); return; }
+
+  // Deduplicate against already-queued files
+  const existing = new Set(state.eocs.map(e => e.file.name));
+  const fresh = valid.filter(f => !existing.has(f.name));
+
+  if (fresh.length === 0) { showUploadError('These files are already queued.'); return; }
+  if (state.eocs.length + fresh.length > 3) {
+    showUploadError(`You can upload up to 3 files. You currently have ${state.eocs.length} queued.`);
+    return;
+  }
+
+  // Add to state and render list immediately
+  fresh.forEach(f => state.eocs.push(makeEoc(f)));
+  renderUploadList();
+
+  // Validate each fresh file
+  await Promise.all(fresh.map(f => validateEoc(state.eocs.find(e => e.file === f))));
+
+  checkStep1Continue();
+}
+
+function renderUploadList() {
+  const list = document.getElementById('upload-list');
+  list.classList.remove('hidden');
+  list.innerHTML = state.eocs.map((eoc, idx) => {
+    const icon = eoc.status === 'validating'
+      ? `<svg class="spinner w-4 h-4 text-blue-500" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-dasharray="40 60"/></svg>`
+      : eoc.status === 'ok'
+        ? `<svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>`
+        : eoc.status === 'error'
+          ? `<svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>`
+          : `<span class="w-4 h-4 text-gray-300">○</span>`;
+    const msg = eoc.status === 'error' ? `<span class="text-xs text-red-500 ml-2">${escapeHtml(eoc.errorMsg)}</span>` : '';
+    return `<div class="flex items-center gap-3 px-4 py-2.5 bg-gray-50 rounded-lg text-sm">
+      ${icon}
+      <span class="flex-1 font-medium truncate">${escapeHtml(eoc.file.name)}</span>
+      ${msg}
+      <button onclick="removeEoc(${idx})" class="text-gray-400 hover:text-gray-600 ml-2 flex-shrink-0">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+function removeEoc(idx) {
+  state.eocs.splice(idx, 1);
+  renderUploadList();
+  if (state.eocs.length === 0) {
+    document.getElementById('upload-list').classList.add('hidden');
+  }
+  checkStep1Continue();
+}
+
+function checkStep1Continue() {
+  const allOk = state.eocs.length > 0 && state.eocs.every(e => e.status === 'ok');
+  document.getElementById('step1-continue').classList.toggle('hidden', !allOk);
+}
+
+async function validateEoc(eoc) {
+  eoc.status = 'validating';
+  renderUploadList();
 
   const fd = new FormData();
-  fd.append('eoc_file', file);
+  fd.append('eoc_file', eoc.file);
 
   try {
     const res = await fetch('/api/validate', { method: 'POST', body: fd });
@@ -324,39 +298,710 @@ async function handleFile(file) {
       const err = await res.json().catch(() => ({ detail: 'Validation failed' }));
       throw new Error(err.detail || 'Validation failed');
     }
-    state.validation = await res.json();
-    state.execVariantIndex = 0;
-    state.execUserEdited = false;
-    state.execSummary = buildExecSummary(state.validation, 0);
-    computeNoDataSections();
-    renderReview();
-    await loadSections();
-    state.generationStart = Date.now(); // timer starts once EOC is validated
-    goToStep(2);
+    eoc.validation = await res.json();
+    eoc.status = 'ok';
+
+    // Exec summary: use Claude result if available, else template variant 0
+    eoc.execSummary = eoc.validation.claude_exec_summary || buildExecSummary(eoc.validation, 0);
+    eoc.execVariantIndex = 0;
+    eoc.execUserEdited = false;
+
+    computeNoDataSections(eoc);
+    state.generationStart = Date.now();
   } catch (err) {
-    statusEl.innerHTML = `<span class="text-red-600">⚠ ${escapeHtml(err.message)}. Please check the file and try again.</span>`;
+    eoc.status = 'error';
+    eoc.errorMsg = err.message;
+  }
+
+  renderUploadList();
+}
+
+// ============================================================
+// STEP 2 — Review (one card per EOC)
+// ============================================================
+function renderAllReviews() {
+  const container = document.getElementById('review-cards');
+  container.innerHTML = '';
+  state.eocs.forEach((eoc, idx) => {
+    const label = eocLabel(eoc);
+    const card = document.createElement('div');
+    card.className = 'card-elev p-8';
+    card.id = `review-card-${idx}`;
+    card.innerHTML = `
+      <div class="flex items-center gap-3 mb-1">
+        <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+          <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+        </div>
+        <h2 class="text-lg font-semibold">${escapeHtml(label)}</h2>
+      </div>
+      <p class="text-sm text-gray-500 ml-11 mb-5">${escapeHtml(eoc.file.name)} · ${new Date().toLocaleString()}</p>
+      <div class="mb-4">
+        <h3 class="section-title">Campaign Overview</h3>
+        <div id="r${idx}-campaign" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
+      </div>
+      <div class="mb-4">
+        <h3 class="section-title">Performance Metrics</h3>
+        <div id="r${idx}-performance" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
+      </div>
+      <div class="mb-4">
+        <h3 class="section-title">Delivery &amp; Spend</h3>
+        <div id="r${idx}-delivery" class="grid grid-cols-2 md:grid-cols-4 gap-2"></div>
+      </div>
+      <div class="mb-4" id="r${idx}-top-performers-section">
+        <h3 class="section-title">Top Performing Titles</h3>
+        <div class="top-wrap"><div id="r${idx}-top-performers" class="top-grid"></div></div>
+      </div>
+      <div class="mb-4" id="r${idx}-top-markets-section">
+        <h3 class="section-title">Top Performing Markets</h3>
+        <div class="top-wrap"><div id="r${idx}-top-markets" class="top-grid"></div></div>
+      </div>
+      <div id="r${idx}-warnings" class="mb-4"></div>
+    `;
+    container.appendChild(card);
+    renderReviewCard(eoc, idx);
+  });
+}
+
+function renderReviewCard(eoc, idx) {
+  const v = eoc.validation;
+  const inputs = v.summary_inputs || {};
+  const displayInputs = Object.assign({}, inputs);
+  if (displayInputs.live_dates) displayInputs.live_dates = compactDateRange(displayInputs.live_dates);
+
+  renderTilesTo(`r${idx}-campaign`, [
+    { key: 'campaign_name', label: 'Campaign' },
+    { key: 'client',        label: 'Client' },
+    { key: 'markets',       label: 'Markets' },
+    { key: 'live_dates',    label: 'Live Dates' },
+  ], displayInputs);
+
+  renderTilesTo(`r${idx}-performance`, [
+    { key: 'ctr',              label: 'CTR' },
+    { key: 'engagement_rate',  label: 'Engagement Rate' },
+    { key: 'vcr',              label: 'VCR' },
+    { key: 'on_screen_rate',   label: 'On-Screen Rate' },
+  ], displayInputs);
+
+  renderTilesTo(`r${idx}-delivery`, [
+    { key: 'delivered_impressions', label: 'Impressions' },
+    { key: 'budget',                label: 'Budget' },
+    { key: 'delivery_incl_av',      label: 'Delivery (incl. AV)' },
+    { key: 'added_value_worth',     label: 'Added Value' },
+  ], displayInputs);
+
+  renderTopGroupsTo(`r${idx}-top-performers`, `r${idx}-top-performers-section`, [
+    { key: 'top_ctr',             title: 'CTR' },
+    { key: 'top_engagement_rate', title: 'Engagement Rate' },
+    { key: 'top_vcr',             title: 'VCR' },
+  ], inputs);
+
+  renderTopMarketsFor(idx, inputs);
+
+  const warnEl = document.getElementById(`r${idx}-warnings`);
+  const populated = Object.keys(inputs).length;
+  warnEl.innerHTML = populated === 0
+    ? `<div class="flex gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3"><span>⚠</span><div>No campaign fields extracted. Check the EOC sheet structure.</div></div>`
+    : `<div class="flex items-center gap-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
+         <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+         <span><strong>EOC validated.</strong> Ready to build.</span>
+       </div>`;
+}
+
+// ============================================================
+// STEP 3 — Customise (tabs)
+// ============================================================
+async function renderCustomiseTabs() {
+  // Load sections once
+  if (!state.sections.length) {
+    const res = await fetch('/api/sections');
+    const data = await res.json();
+    state.sections = data.sections || [];
+  }
+
+  // Init each EOC's section selections if not done yet
+  state.eocs.forEach(eoc => {
+    if (!eoc.selectedSections.size && !eoc._sectionsInitialised) {
+      eoc._sectionsInitialised = true;
+      state.sections.forEach(s => {
+        if (s.required || DEFAULT_SELECTED_SECTIONS.has(s.section_id)) {
+          eoc.selectedSections.add(s.section_id);
+          eoc.selectedDeckSections.add(s.section_id);
+        }
+      });
+    }
+  });
+
+  renderTabBar();
+  renderActivePanel();
+}
+
+function renderTabBar() {
+  const bar = document.getElementById('customise-tabs');
+  bar.innerHTML = state.eocs.map((eoc, idx) => {
+    const label = eocLabel(eoc);
+    const active = idx === state.activeTab;
+    return `<button onclick="switchTab(${idx})"
+      class="px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors whitespace-nowrap
+             ${active ? 'border-blue-600 text-blue-600 bg-white' : 'border-transparent text-gray-500 hover:text-gray-700'}">
+      ${escapeHtml(label)}
+    </button>`;
+  }).join('');
+}
+
+function switchTab(idx) {
+  // Save current textarea value before switching
+  saveActiveTabState();
+  state.activeTab = idx;
+  renderTabBar();
+  renderActivePanel();
+}
+
+function saveActiveTabState() {
+  const eoc = state.eocs[state.activeTab];
+  if (!eoc) return;
+  const ta = document.getElementById('exec-summary-input');
+  if (ta) {
+    eoc.execSummary = ta.value;
   }
 }
 
-function computeNoDataSections() {
-  state.noDataSections = new Set();
-  const inputs = (state.validation && state.validation.summary_inputs) || {};
+function renderActivePanel() {
+  const container = document.getElementById('customise-panels');
+  const eoc = state.eocs[state.activeTab];
+  const idx = state.activeTab;
+  if (!eoc) return;
+
+  container.innerHTML = `
+    <div class="card-elev p-8">
+
+      <div class="mb-8">
+        <div class="text-sm font-medium mb-3">What Should I Build?</div>
+        <div class="grid grid-cols-3 gap-3" id="output-chips-${idx}">
+          ${['one_pager','slide_deck','both'].map(val => {
+            const labels = { one_pager: 'One Pager', slide_deck: 'Full Deck', both: 'Both' };
+            const icons = {
+              one_pager: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
+              slide_deck: 'M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z',
+              both: 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2',
+            };
+            const sel = eoc.outputType === val;
+            return `<label class="output-chip ${sel ? 'selected' : ''}" data-output="${val}" onclick="setOutputType(${idx}, '${val}', this)">
+              <input type="radio" name="output_type_${idx}" value="${val}" class="hidden" ${sel ? 'checked' : ''} />
+              <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="${icons[val]}"/></svg>
+              <div class="text-sm mt-2 ${sel ? 'font-medium' : ''}">${labels[val]}</div>
+            </label>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <div class="mb-8">
+        <div class="flex items-center justify-between mb-3">
+          <div class="text-sm font-medium" id="sections-label-${idx}">${eoc.outputType === 'slide_deck' ? 'Slide Deck Sections' : 'One Pager Sections'}</div>
+          <div class="flex gap-2 text-xs">
+            <button class="text-blue-600 hover:underline" onclick="selectAllSections(${idx})">Select All</button>
+            <span class="text-gray-300">|</span>
+            <button class="text-blue-600 hover:underline" onclick="selectNoSections(${idx})">Clear</button>
+          </div>
+        </div>
+        <div id="sections-grid-${idx}" class="grid grid-cols-2 gap-2"></div>
+      </div>
+
+      <div class="mb-6">
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-sm font-medium">Executive Summary</div>
+          <div class="flex gap-3 items-center">
+            ${eoc.validation && eoc.validation.claude_exec_summary
+              ? `<span class="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">✦ Claude</span>`
+              : ''}
+            <button class="text-xs text-blue-600 hover:underline" onclick="onRegenerateClick(${idx})">
+              <svg class="inline w-3.5 h-3.5 -mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              Regenerate
+            </button>
+          </div>
+        </div>
+        <textarea id="exec-summary-input" rows="5" maxlength="550"
+          class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          oninput="onExecInput(${idx}, this)">${escapeHtml(eoc.execSummary)}</textarea>
+        <div class="text-xs text-gray-500 mt-1">
+          <span id="summary-count">${eoc.execSummary.length}</span> / 550 characters
+          <span id="summary-variant-hint" class="ml-2 text-gray-400">${getVariantHint(eoc)}</span>
+        </div>
+      </div>
+
+      <details id="advanced-options-${idx}" class="bg-gray-50 rounded-lg p-4 ${eoc.outputType === 'both' ? '' : 'hidden'}">
+        <summary class="cursor-pointer text-sm font-medium text-gray-700">Advanced Options</summary>
+        <div class="mt-4">
+          <label class="text-xs text-gray-600">Deck mode</label>
+          <select id="deck-mode-${idx}" class="block w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            onchange="setDeckMode(${idx}, this.value)">
+            <option value="matching" ${eoc.deckMode === 'matching' ? 'selected' : ''}>Matching (uses same sections as One Pager)</option>
+            <option value="full" ${eoc.deckMode === 'full' ? 'selected' : ''}>Full (all available slides)</option>
+            <option value="custom" ${eoc.deckMode === 'custom' ? 'selected' : ''}>Custom (pick deck sections separately)</option>
+          </select>
+        </div>
+      </details>
+
+      <div id="custom-deck-section-${idx}" class="mb-8 mt-4 ${(eoc.outputType === 'both' && eoc.deckMode === 'custom') ? '' : 'hidden'}">
+        <div class="flex items-center justify-between mb-3">
+          <div class="text-sm font-medium">Custom Slide Deck Sections</div>
+          <div class="flex gap-2 text-xs">
+            <button class="text-blue-600 hover:underline" onclick="selectAllDeckSections(${idx})">Select All</button>
+            <span class="text-gray-300">|</span>
+            <button class="text-blue-600 hover:underline" onclick="selectNoDeckSections(${idx})">Clear</button>
+          </div>
+        </div>
+        <div id="deck-sections-grid-${idx}" class="grid grid-cols-2 gap-2"></div>
+      </div>
+
+    </div>
+  `;
+
+  renderSectionsGrid(idx);
+}
+
+function eocLabel(eoc) {
+  if (eoc.validation) {
+    const name = (eoc.validation.summary_inputs || {}).campaign_name;
+    if (name) return name;
+  }
+  return eoc.file.name.replace(/\.[^.]+$/, '');
+}
+
+function getVariantHint(eoc) {
+  if (eoc.execUserEdited) return '· edited';
+  if (eoc.validation && eoc.validation.claude_exec_summary && eoc.execVariantIndex === 0) return '· Claude';
+  const names = ['Performance-led', 'Brand-led', 'Concise'];
+  return `· ${names[eoc.execVariantIndex] || ''}`;
+}
+
+function onExecInput(idx, ta) {
+  const eoc = state.eocs[idx];
+  eoc.execSummary = ta.value;
+  eoc.execUserEdited = true;
+  document.getElementById('summary-count').textContent = ta.value.length;
+  document.getElementById('summary-variant-hint').textContent = '· edited';
+}
+
+function setOutputType(idx, val, el) {
+  const eoc = state.eocs[idx];
+  eoc.outputType = val;
+  document.querySelectorAll(`#output-chips-${idx} .output-chip`).forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+
+  document.getElementById(`sections-label-${idx}`).textContent =
+    val === 'slide_deck' ? 'Slide Deck Sections' : 'One Pager Sections';
+
+  const showAdv = val === 'both';
+  document.getElementById(`advanced-options-${idx}`).classList.toggle('hidden', !showAdv);
+
+  const showCustom = showAdv && eoc.deckMode === 'custom';
+  document.getElementById(`custom-deck-section-${idx}`).classList.toggle('hidden', !showCustom);
+}
+
+function setDeckMode(idx, val) {
+  const eoc = state.eocs[idx];
+  eoc.deckMode = val;
+  const showCustom = val === 'custom';
+  document.getElementById(`custom-deck-section-${idx}`).classList.toggle('hidden', !showCustom);
+  if (showCustom) renderDeckSectionsGrid(idx);
+}
+
+function renderSectionsGrid(idx) {
+  const eoc = state.eocs[idx];
+  const grid = document.getElementById(`sections-grid-${idx}`);
+  if (!grid) return;
+  grid.innerHTML = '';
+  state.sections.forEach(s => {
+    if (s.section_id === 'TITLE_OVERVIEW') return;
+    const noData = eoc.noDataSections.has(s.section_id);
+    const isSel = eoc.selectedSections.has(s.section_id);
+    const badge = noData ? `<span class="no-data-badge">Not enough data</span>` : '';
+    const req = s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : '';
+    grid.insertAdjacentHTML('beforeend', `
+      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''} ${noData ? 'no-data' : ''}"
+        data-section="${escapeHtml(s.section_id)}" data-eoc="${idx}"
+        onclick="toggleSection(event, ${idx}, '${escapeHtml(s.section_id)}', ${s.required})">
+        <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
+        <span class="text-sm label-text">${escapeHtml(s.label)}${req}</span>
+        ${badge}
+      </label>`);
+  });
+}
+
+function renderDeckSectionsGrid(idx) {
+  const eoc = state.eocs[idx];
+  if (!eoc.selectedDeckSections.size) {
+    eoc.selectedDeckSections = new Set(eoc.selectedSections);
+  }
+  const grid = document.getElementById(`deck-sections-grid-${idx}`);
+  if (!grid) return;
+  grid.innerHTML = '';
+  state.sections.forEach(s => {
+    if (s.section_id === 'TITLE_OVERVIEW') return;
+    const noData = eoc.noDataSections.has(s.section_id);
+    const isSel = eoc.selectedDeckSections.has(s.section_id);
+    const badge = noData ? `<span class="no-data-badge">Not enough data</span>` : '';
+    const req = s.required ? ' <span class="text-xs text-gray-500">(required)</span>' : '';
+    grid.insertAdjacentHTML('beforeend', `
+      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''} ${noData ? 'no-data' : ''}"
+        data-deck-section="${escapeHtml(s.section_id)}" data-eoc="${idx}"
+        onclick="toggleDeckSection(event, ${idx}, '${escapeHtml(s.section_id)}', ${s.required})">
+        <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
+        <span class="text-sm label-text">${escapeHtml(s.label)}${req}</span>
+        ${badge}
+      </label>`);
+  });
+}
+
+function toggleSection(e, idx, sectionId, required) {
+  e.preventDefault();
+  if (required) return;
+  const eoc = state.eocs[idx];
+  const el = e.currentTarget;
+  const cb = el.querySelector('input');
+  if (eoc.selectedSections.has(sectionId)) {
+    eoc.selectedSections.delete(sectionId);
+    el.classList.remove('selected');
+    cb.checked = false;
+  } else {
+    eoc.selectedSections.add(sectionId);
+    el.classList.add('selected');
+    cb.checked = true;
+  }
+}
+
+function toggleDeckSection(e, idx, sectionId, required) {
+  e.preventDefault();
+  if (required) return;
+  const eoc = state.eocs[idx];
+  const el = e.currentTarget;
+  const cb = el.querySelector('input');
+  if (eoc.selectedDeckSections.has(sectionId)) {
+    eoc.selectedDeckSections.delete(sectionId);
+    el.classList.remove('selected');
+    cb.checked = false;
+  } else {
+    eoc.selectedDeckSections.add(sectionId);
+    el.classList.add('selected');
+    cb.checked = true;
+  }
+}
+
+function selectAllSections(idx) {
+  const eoc = state.eocs[idx];
+  eoc.selectedSections = new Set(state.sections.map(s => s.section_id));
+  document.querySelectorAll(`#sections-grid-${idx} label`).forEach(el => {
+    el.classList.add('selected');
+    const cb = el.querySelector('input');
+    if (!cb.disabled) cb.checked = true;
+  });
+}
+
+function selectNoSections(idx) {
+  const eoc = state.eocs[idx];
+  eoc.selectedSections.clear();
+  document.querySelectorAll(`#sections-grid-${idx} label`).forEach(el => {
+    const cb = el.querySelector('input');
+    if (cb.disabled) { eoc.selectedSections.add(el.dataset.section); return; }
+    el.classList.remove('selected');
+    cb.checked = false;
+  });
+}
+
+function selectAllDeckSections(idx) {
+  const eoc = state.eocs[idx];
+  eoc.selectedDeckSections = new Set(state.sections.map(s => s.section_id));
+  document.querySelectorAll(`#deck-sections-grid-${idx} label`).forEach(el => {
+    el.classList.add('selected');
+    const cb = el.querySelector('input');
+    if (!cb.disabled) cb.checked = true;
+  });
+}
+
+function selectNoDeckSections(idx) {
+  const eoc = state.eocs[idx];
+  eoc.selectedDeckSections.clear();
+  document.querySelectorAll(`#deck-sections-grid-${idx} label`).forEach(el => {
+    const cb = el.querySelector('input');
+    if (cb.disabled) { eoc.selectedDeckSections.add(el.dataset.deckSection); return; }
+    el.classList.remove('selected');
+    cb.checked = false;
+  });
+}
+
+// ============================================================
+// Exec summary + Regenerate
+// ============================================================
+function onRegenerateClick(idx) {
+  const eoc = state.eocs[idx];
+  if (eoc.execUserEdited) {
+    state.regenTargetIdx = idx;
+    document.getElementById('regen-warning-modal').classList.remove('hidden');
+  } else {
+    doRegenerate(idx);
+  }
+}
+
+function cancelRegenerate() {
+  document.getElementById('regen-warning-modal').classList.add('hidden');
+  state.regenTargetIdx = null;
+}
+
+function confirmRegenerate() {
+  document.getElementById('regen-warning-modal').classList.add('hidden');
+  if (state.regenTargetIdx !== null) doRegenerate(state.regenTargetIdx);
+  state.regenTargetIdx = null;
+}
+
+function doRegenerate(idx) {
+  const eoc = state.eocs[idx];
+  // After Claude variant (index 0), cycle through template variants 1 and 2
+  eoc.execVariantIndex = (eoc.execVariantIndex + 1) % 3;
+  eoc.execSummary = buildExecSummary(eoc.validation, eoc.execVariantIndex);
+  eoc.execUserEdited = false;
+  const ta = document.getElementById('exec-summary-input');
+  if (ta) {
+    ta.value = eoc.execSummary;
+    document.getElementById('summary-count').textContent = eoc.execSummary.length;
+    document.getElementById('summary-variant-hint').textContent = getVariantHint(eoc);
+  }
+}
+
+// ============================================================
+// STEP 4 + 5 — Generate + Done
+// ============================================================
+async function startGeneration() {
+  saveActiveTabState();
+  goToStep(4);
+
+  const list = document.getElementById('progress-list');
+  list.innerHTML = state.eocs.map((eoc, idx) => {
+    const label = eocLabel(eoc);
+    const steps = buildStepList(eoc.outputType);
+    return `
+      <div class="bg-gray-50 rounded-xl p-5" id="prog-block-${idx}">
+        <div class="text-sm font-medium text-gray-700 mb-3">${escapeHtml(label)}</div>
+        <div class="space-y-2" id="prog-steps-${idx}">
+          ${steps.map((s, i) => `
+            <div class="prog-item flex items-center gap-3" data-i="${i}">
+              <span class="prog-icon w-5 h-5 inline-block text-gray-400">○</span>
+              <span class="text-sm text-gray-600">${escapeHtml(s)}</span>
+            </div>`).join('')}
+        </div>
+        <div id="prog-error-${idx}" class="hidden mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3"></div>
+      </div>`;
+  }).join('');
+
+  // Fire all in parallel
+  const results = await Promise.all(state.eocs.map((eoc, idx) => generateOne(eoc, idx)));
+  setTimeout(() => showDone(results), 500);
+}
+
+function buildStepList(outputType) {
+  return [
+    'Reading EOC Data',
+    'Validating Campaign Data',
+    outputType === 'slide_deck' ? null : 'Populating One Pager',
+    outputType === 'one_pager'  ? null : 'Building Slide Deck',
+    'Final Polish',
+  ].filter(Boolean);
+}
+
+function markProgStep(idx, stepIdx, status) {
+  const el = document.querySelector(`#prog-steps-${idx} .prog-item[data-i="${stepIdx}"]`);
+  if (!el) return;
+  const icon = el.querySelector('.prog-icon');
+  if (status === 'active') {
+    icon.innerHTML = '<svg class="spinner w-5 h-5" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="3" stroke-dasharray="40 60"/></svg>';
+  } else if (status === 'done') {
+    icon.innerHTML = '<span class="text-green-600">✓</span>';
+  }
+}
+
+async function generateOne(eoc, idx) {
+  const steps = buildStepList(eoc.outputType);
+
+  // Animate progress steps
+  for (let i = 0; i < steps.length - 1; i++) {
+    setTimeout(() => markProgStep(idx, i, 'active'), i * 400);
+    setTimeout(() => markProgStep(idx, i, 'done'), (i + 1) * 400);
+  }
+  setTimeout(() => markProgStep(idx, steps.length - 1, 'active'), (steps.length - 1) * 400);
+
+  const isDeckOnly = eoc.outputType === 'slide_deck';
+  const primarySections = [...eoc.selectedSections];
+  const finalDeckSections = isDeckOnly ? primarySections : [...eoc.selectedDeckSections];
+
+  const fd = new FormData();
+  fd.append('eoc_file', eoc.file);
+  fd.append('output_type', eoc.outputType);
+  fd.append('selected_sections', JSON.stringify(primarySections));
+  fd.append('deck_mode', isDeckOnly ? 'custom' : eoc.deckMode);
+  fd.append('custom_deck_sections', JSON.stringify(finalDeckSections));
+  fd.append('exec_summary', eoc.execSummary || '');
+
+  try {
+    const res = await fetch('/api/generate', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Generation failed' }));
+      throw new Error(err.detail || 'Generation failed');
+    }
+    const data = await res.json();
+    markProgStep(idx, steps.length - 1, 'done');
+    return { ok: true, idx, data, label: eocLabel(eoc) };
+  } catch (err) {
+    const errEl = document.getElementById(`prog-error-${idx}`);
+    if (errEl) { errEl.textContent = `⚠ ${err.message}`; errEl.classList.remove('hidden'); }
+    return { ok: false, idx, error: err.message, label: eocLabel(eoc) };
+  }
+}
+
+function showDone(results) {
+  goToStep(5);
+
+  const totalSec = state.generationStart
+    ? Math.floor((Date.now() - state.generationStart) / 1000)
+    : 0;
+  const timeStr = totalSec
+    ? `Built in ${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')} · `
+    : '';
+  const count = results.filter(r => r.ok).length;
+  document.getElementById('done-meta').textContent =
+    `${timeStr}${count} of ${results.length} generated · ${new Date().toLocaleString()}`;
+
+  const dl = document.getElementById('done-downloads');
+  dl.innerHTML = '';
+
+  results.forEach(r => {
+    const heading = `<h3 class="text-sm font-semibold text-gray-700 mb-2">${escapeHtml(r.label)}</h3>`;
+    if (!r.ok) {
+      dl.insertAdjacentHTML('beforeend', `
+        <div>
+          ${heading}
+          <div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3">⚠ ${escapeHtml(r.error)}</div>
+        </div>`);
+      return;
+    }
+    const cards = [];
+    if (r.data.one_pager_url) {
+      cards.push(`
+        <a href="${escapeHtml(r.data.one_pager_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3">
+          <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
+            <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          </div>
+          <div><div class="font-medium">One Pager</div><div class="text-xs text-gray-500 mt-1">.pptx · click to download</div></div>
+        </a>`);
+    }
+    if (r.data.deck_url) {
+      cards.push(`
+        <a href="${escapeHtml(r.data.deck_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3">
+          <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
+            <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
+          </div>
+          <div><div class="font-medium">Slide Deck</div><div class="text-xs text-gray-500 mt-1">.pptx · click to download</div></div>
+        </a>`);
+    }
+    dl.insertAdjacentHTML('beforeend', `
+      <div>
+        ${heading}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">${cards.join('')}</div>
+      </div>`);
+  });
+}
+
+// ============================================================
+// SHARED RENDERERS
+// ============================================================
+function renderTilesTo(containerId, fields, inputs) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '';
+  fields.forEach(f => {
+    const val = inputs[f.key];
+    if (val) {
+      el.insertAdjacentHTML('beforeend', `
+        <div class="metric-tile">
+          <div class="label">${escapeHtml(f.label)}</div>
+          <div class="value">${escapeHtml(val)}</div>
+        </div>`);
+    }
+  });
+}
+
+function renderTopGroupsTo(containerId, sectionId, groups, inputs) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = '';
+  let anyShown = false;
+  groups.forEach(g => {
+    const list = inputs[g.key];
+    if (Array.isArray(list) && list.length) {
+      anyShown = true;
+      const rows = list.map(item => `
+        <div class="row">
+          <span class="name">${escapeHtml(item.name || '—')}</span>
+          <span class="val">${escapeHtml(item.value || '—')}</span>
+        </div>`).join('');
+      container.insertAdjacentHTML('beforeend', `
+        <div class="top-col"><h5>${escapeHtml(g.title)}</h5>${rows}</div>`);
+    }
+  });
+  const sec = document.getElementById(sectionId);
+  if (sec) sec.classList.toggle('hidden', !anyShown);
+}
+
+function renderTopMarketsFor(idx, inputs) {
+  const candidates = [
+    [
+      { key: 'top_ctr_markets',             title: 'CTR' },
+      { key: 'top_engagement_rate_markets', title: 'Engagement Rate' },
+      { key: 'top_vcr_markets',             title: 'VCR' },
+    ],
+    [
+      { key: 'top_ctr_market',             title: 'CTR' },
+      { key: 'top_engagement_rate_market', title: 'Engagement Rate' },
+      { key: 'top_vcr_market',             title: 'VCR' },
+    ],
+    [
+      { key: 'top_markets_ctr',             title: 'CTR' },
+      { key: 'top_markets_engagement_rate', title: 'Engagement Rate' },
+      { key: 'top_markets_vcr',             title: 'VCR' },
+    ],
+    [
+      { key: 'market_top_ctr',             title: 'CTR' },
+      { key: 'market_top_engagement_rate', title: 'Engagement Rate' },
+      { key: 'market_top_vcr',             title: 'VCR' },
+    ],
+  ];
+  for (const groups of candidates) {
+    const hasAny = groups.some(g => Array.isArray(inputs[g.key]) && inputs[g.key].length);
+    if (hasAny) {
+      renderTopGroupsTo(`r${idx}-top-markets`, `r${idx}-top-markets-section`, groups, inputs);
+      return;
+    }
+  }
+  const sec = document.getElementById(`r${idx}-top-markets-section`);
+  if (sec) sec.classList.add('hidden');
+}
+
+function computeNoDataSections(eoc) {
+  eoc.noDataSections = new Set();
+  const inputs = (eoc.validation && eoc.validation.summary_inputs) || {};
   for (const [sectionId, requiredKeys] of Object.entries(SECTION_DATA_REQUIREMENTS)) {
     const hasAnyData = requiredKeys.some(k => {
       const val = inputs[k];
       return Array.isArray(val) ? val.length > 0 : !!val;
     });
-    if (!hasAnyData) {
-      state.noDataSections.add(sectionId);
-    }
+    if (!hasAnyData) eoc.noDataSections.add(sectionId);
   }
 }
 
-// ----- Exec summary generation -----
-
+// ============================================================
+// EXEC SUMMARY TEMPLATES (fallback when Claude unavailable)
+// ============================================================
 function buildExecSummary(validation, variantIndex) {
   const i = validation && validation.summary_inputs ? validation.summary_inputs : {};
-  const variant = variantIndex % state.execVariantCount;
+  const variant = variantIndex % 3;
 
   const campaign  = i.campaign_name || 'The campaign';
   const markets   = i.markets || '';
@@ -377,15 +1022,10 @@ function buildExecSummary(validation, variantIndex) {
     return (
       `${campaign} delivered strong audience engagement ${marketPhrase}, ` +
       `generating ${impsNice} and exceeding booked delivery. ` +
-      `The campaign achieved ${pct(ctr, 'CTR')}${joinMetrics([
-        pct(er, 'engagement'), pct(vcr, 'VCR'), pct(osr, 'on-screen rate'),
-      ])}. ` +
-      (winner
-        ? `${winner} led performance across premium environments.`
-        : `Performance was led by premium publishers in market.`)
+      `The campaign achieved ${pct(ctr, 'CTR')}${joinMetrics([pct(er, 'engagement'), pct(vcr, 'VCR'), pct(osr, 'on-screen rate')])}. ` +
+      (winner ? `${winner} led performance across premium environments.` : `Performance was led by premium publishers in market.`)
     );
   }
-
   if (variant === 1) {
     return (
       `${campaign} delivered strong upper-funnel performance ${marketPhrase}, ` +
@@ -398,15 +1038,10 @@ function buildExecSummary(validation, variantIndex) {
         : `reinforcing strong audience attention and brand visibility.`)
     );
   }
-
   return (
     `${campaign} ran ${marketPhrase} and delivered ${impsNice}, ` +
-    `with ${pct(ctr, 'CTR')}${joinMetrics([
-      pct(er, 'engagement'), pct(vcr, 'VCR'),
-    ])}. ` +
-    (winner
-      ? `${winner} led performance across the title set.`
-      : `Delivery exceeded booked plan across the title set.`)
+    `with ${pct(ctr, 'CTR')}${joinMetrics([pct(er, 'engagement'), pct(vcr, 'VCR')])}. ` +
+    (winner ? `${winner} led performance across the title set.` : `Delivery exceeded booked plan across the title set.`)
   );
 }
 
@@ -431,45 +1066,6 @@ function joinMetrics(arr) {
   return `, with ${list.join(', ')} and ${last}`;
 }
 
-function onRegenerateClick() {
-  if (state.execUserEdited) {
-    document.getElementById('regen-warning-modal').classList.remove('hidden');
-  } else {
-    doRegenerate();
-  }
-}
-
-function cancelRegenerate() {
-  document.getElementById('regen-warning-modal').classList.add('hidden');
-}
-
-function confirmRegenerate() {
-  document.getElementById('regen-warning-modal').classList.add('hidden');
-  doRegenerate();
-}
-
-function doRegenerate() {
-  state.execVariantIndex = (state.execVariantIndex + 1) % state.execVariantCount;
-  state.execSummary = buildExecSummary(state.validation, state.execVariantIndex);
-  state.execUserEdited = false;
-  const ta = document.getElementById('exec-summary-input');
-  ta.value = state.execSummary;
-  document.getElementById('summary-count').textContent = ta.value.length;
-  updateVariantHint();
-}
-
-function updateVariantHint() {
-  const names = ['Performance-led', 'Brand-led', 'Concise'];
-  const hint = document.getElementById('summary-variant-hint');
-  if (state.execUserEdited) {
-    hint.textContent = '· edited';
-  } else {
-    hint.textContent = `· ${names[state.execVariantIndex] || ''}`;
-  }
-}
-
-// ----- Step 2: Review (renderers — unchanged) -----
-
 function compactDateRange(s) {
   if (!s || typeof s !== 'string') return s;
   const monthMap = {
@@ -480,580 +1076,13 @@ function compactDateRange(s) {
   Object.keys(monthMap).forEach(full => {
     out = out.replace(new RegExp('\\b' + full + '\\b', 'g'), monthMap[full]);
   });
-  out = out.replace(/\s+-\s+/g, ' – ');
-  return out;
-}
-
-function renderReview() {
-  const v = state.validation;
-  const inputs = v.summary_inputs || {};
-
-  document.getElementById('review-filename').textContent =
-    `${v.filename || 'EOC file'} · ${new Date().toLocaleString()}`;
-
-  const displayInputs = Object.assign({}, inputs);
-  if (displayInputs.live_dates) {
-    displayInputs.live_dates = compactDateRange(displayInputs.live_dates);
-  }
-
-  renderTiles('campaign-tiles', [
-    { key: 'campaign_name',   label: 'Campaign' },
-    { key: 'client',          label: 'Client' },
-    { key: 'markets',         label: 'Markets' },
-    { key: 'live_dates',      label: 'Live Dates' },
-  ], displayInputs);
-
-  renderTiles('performance-tiles', [
-    { key: 'ctr',                 label: 'CTR' },
-    { key: 'engagement_rate',     label: 'Engagement Rate' },
-    { key: 'vcr',                 label: 'VCR' },
-    { key: 'on_screen_rate',      label: 'On-Screen Rate' },
-  ], displayInputs);
-
-  renderTiles('delivery-tiles', [
-    { key: 'delivered_impressions', label: 'Impressions' },
-    { key: 'budget',                label: 'Budget' },
-    { key: 'delivery_incl_av',      label: 'Delivery (incl. AV)' },
-    { key: 'added_value_worth',     label: 'Added Value' },
-  ], displayInputs);
-
-  renderTopPerformers(inputs);
-  renderTopMarkets(inputs);
-
-  const warnEl = document.getElementById('review-warnings');
-  const populated = Object.keys(inputs).length;
-  if (populated === 0) {
-    warnEl.innerHTML =
-      `<div class="flex gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">
-         <span>⚠</span><div>The file parsed, but no campaign fields were extracted. Check the EOC sheet structure.</div>
-       </div>`;
-  } else {
-    warnEl.innerHTML =
-      `<div class="flex items-center gap-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded-lg px-4 py-3">
-         <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
-         <span><strong>EOC has been validated.</strong> Ready to build.</span>
-       </div>`;
-  }
-
-  renderFormattedReport(v.display_validation_text || '', inputs);
-}
-
-function renderTiles(containerId, fields, inputs) {
-  const el = document.getElementById(containerId);
-  el.innerHTML = '';
-  fields.forEach(f => {
-    const val = inputs[f.key];
-    if (val) {
-      el.insertAdjacentHTML('beforeend', `
-        <div class="metric-tile">
-          <div class="label">${escapeHtml(f.label)}</div>
-          <div class="value">${escapeHtml(val)}</div>
-        </div>`);
-    }
-  });
-}
-
-function renderTopGroups(containerId, sectionId, groups, inputs) {
-  const container = document.getElementById(containerId);
-  container.innerHTML = '';
-  let anyShown = false;
-
-  groups.forEach(g => {
-    const list = inputs[g.key];
-    if (Array.isArray(list) && list.length) {
-      anyShown = true;
-      const rows = list.map(item => `
-        <div class="row">
-          <span class="name">${escapeHtml(item.name || '—')}</span>
-          <span class="val">${escapeHtml(item.value || '—')}</span>
-        </div>`).join('');
-      container.insertAdjacentHTML('beforeend', `
-        <div class="top-col">
-          <h5>${escapeHtml(g.title)}</h5>
-          ${rows}
-        </div>`);
-    }
-  });
-
-  document.getElementById(sectionId).classList.toggle('hidden', !anyShown);
-}
-
-function renderTopPerformers(inputs) {
-  renderTopGroups('top-performers', 'top-performers-section', [
-    { key: 'top_ctr',             title: 'CTR' },
-    { key: 'top_engagement_rate', title: 'Engagement Rate' },
-    { key: 'top_vcr',             title: 'VCR' },
-  ], inputs);
-}
-
-function renderTopMarkets(inputs) {
-  const candidates = [
-    [
-      { key: 'top_ctr_markets',             title: 'CTR' },
-      { key: 'top_engagement_rate_markets', title: 'Engagement Rate' },
-      { key: 'top_vcr_markets',             title: 'VCR' },
-    ],
-    [
-      { key: 'top_ctr_market',             title: 'CTR' },
-      { key: 'top_engagement_rate_market', title: 'Engagement Rate' },
-      { key: 'top_vcr_market',             title: 'VCR' },
-    ],
-    [
-      { key: 'top_markets_ctr',             title: 'CTR' },
-      { key: 'top_markets_engagement_rate', title: 'Engagement Rate' },
-      { key: 'top_markets_vcr',             title: 'VCR' },
-    ],
-    [
-      { key: 'market_top_ctr',             title: 'CTR' },
-      { key: 'market_top_engagement_rate', title: 'Engagement Rate' },
-      { key: 'market_top_vcr',             title: 'VCR' },
-    ],
-  ];
-
-  for (const groups of candidates) {
-    const hasAny = groups.some(g => Array.isArray(inputs[g.key]) && inputs[g.key].length);
-    if (hasAny) {
-      renderTopGroups('top-markets', 'top-markets-section', groups, inputs);
-      return;
-    }
-  }
-  document.getElementById('top-markets-section').classList.add('hidden');
-}
-
-function renderFormattedReport(markdown, inputs) {
-  if (!markdown) {
-    document.getElementById('review-formatted').innerHTML =
-      '<p class="text-sm text-gray-500">No validation report available.</p>';
-    return;
-  }
-
-  const lines = markdown.split('\n');
-  const sections = [];
-  let current = null;
-  let subHeader = null;
-
-  for (let raw of lines) {
-    const line = raw.trim();
-    if (!line) { subHeader = null; continue; }
-
-    const sectionMatch = line.match(/^\*\*([^*:]+)\*\*$/);
-    if (sectionMatch) {
-      current = { title: sectionMatch[1].trim(), blocks: [] };
-      sections.push(current);
-      subHeader = null;
-      continue;
-    }
-    if (!current) continue;
-
-    const kvMatch = line.match(/^[•\-]\s*\*\*([^:*]+):\*\*\s*(.+)$/);
-    if (kvMatch) {
-      ensureBlock(current, 'kv', subHeader).items.push({
-        k: kvMatch[1].trim(),
-        v: kvMatch[2].trim(),
-      });
-      continue;
-    }
-
-    const bulletMatch = line.match(/^[•\-]\s+(.+)$/);
-    if (bulletMatch) {
-      ensureBlock(current, 'list', subHeader).items.push(bulletMatch[1].trim());
-      continue;
-    }
-
-    if (!line.startsWith('*') && !line.startsWith('•') && !line.startsWith('-')) {
-      subHeader = line;
-      continue;
-    }
-  }
-
-  const html = sections.map(s => {
-    const titleLower = s.title.trim().toLowerCase();
-
-    if (titleLower.startsWith('top performing')) {
-      return renderTopPerformersInReport(s);
-    }
-
-    if (titleLower === 'creative formats') {
-      const items = s.blocks.flatMap(b => b.items)
-        .map(i => typeof i === 'string' ? i : `${i.k}: ${i.v}`);
-      const body = items.map(i =>
-        `<div class="vr-inline">${escapeHtml(i)}</div>`
-      ).join('');
-      return `<div class="vr-section"><h4>${escapeHtml(s.title)}</h4>${body}</div>`;
-    }
-
-    const body = s.blocks.map(b => {
-      const subTitle = b.subHeader
-        ? `<div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-3 mb-1">${escapeHtml(b.subHeader)}</div>`
-        : '';
-      if (b.type === 'kv') {
-        const rows = b.items.map(i =>
-          `<div class="vr-row"><span class="k">${escapeHtml(i.k)}</span><span class="v">${escapeHtml(i.v)}</span></div>`
-        ).join('');
-        return subTitle + rows;
-      } else {
-        const items = b.items.map(i => `<div class="vr-inline">${escapeHtml(i)}</div>`).join('');
-        return subTitle + items;
-      }
-    }).join('');
-    return `<div class="vr-section"><h4>${escapeHtml(s.title)}</h4>${body}</div>`;
-  }).join('');
-
-  document.getElementById('review-formatted').innerHTML = html ||
-    `<pre class="text-xs whitespace-pre-wrap text-gray-600">${escapeHtml(markdown)}</pre>`;
-}
-
-function renderTopPerformersInReport(section) {
-  const cols = [];
-  let currentCol = null;
-
-  section.blocks.forEach(b => {
-    if (b.subHeader && (!currentCol || currentCol.title !== b.subHeader)) {
-      currentCol = { title: b.subHeader, rows: [] };
-      cols.push(currentCol);
-    }
-    if (!currentCol) {
-      currentCol = { title: '', rows: [] };
-      cols.push(currentCol);
-    }
-    b.items.forEach(i => {
-      if (typeof i === 'string') {
-        currentCol.rows.push(i);
-      } else if (i && i.k && i.v) {
-        currentCol.rows.push(`${i.k} - ${i.v}`);
-      }
-    });
-  });
-
-  const colsHtml = cols.map(c => `
-    <div class="vr-top-col">
-      <h5>${escapeHtml(c.title || '—')}</h5>
-      ${c.rows.map(r => `<div class="vr-top-row">${escapeHtml(r)}</div>`).join('')}
-    </div>`).join('');
-
-  return `
-    <div class="vr-section">
-      <h4>${escapeHtml(section.title)}</h4>
-      <div class="vr-top-grid">${colsHtml}</div>
-    </div>`;
-}
-
-function ensureBlock(section, type, subHeader) {
-  const last = section.blocks[section.blocks.length - 1];
-  if (last && last.type === type && (last.subHeader || null) === (subHeader || null)) {
-    return last;
-  }
-  const newBlock = { type, items: [], subHeader: subHeader || null };
-  section.blocks.push(newBlock);
-  return newBlock;
+  return out.replace(/\s+-\s+/g, ' – ');
 }
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, ch => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[ch]));
-}
-
-// ----- Step 3: Customise -----
-async function loadSections() {
-  const res = await fetch('/api/sections');
-  const data = await res.json();
-  state.sections = data.sections || [];
-
-  state.selectedSections = new Set();
-  state.sections.forEach(s => {
-    if (s.required || DEFAULT_SELECTED_SECTIONS.has(s.section_id)) {
-      state.selectedSections.add(s.section_id);
-    }
-  });
-
-  renderOnePagerSections();
-  renderDeckSections();
-
-  const ta = document.getElementById('exec-summary-input');
-  ta.value = state.execSummary;
-  document.getElementById('summary-count').textContent = ta.value.length;
-  updateVariantHint();
-
-  updateConditionalUI();
-}
-
-function renderOnePagerSections() {
-  const grid = document.getElementById('sections-grid');
-  grid.innerHTML = '';
-  state.sections.forEach(s => {
-    if (s.section_id === 'TITLE_OVERVIEW') return;
-
-    const noData = state.noDataSections.has(s.section_id);
-    const isSel = state.selectedSections.has(s.section_id);
-
-    const badge = noData
-      ? `<span class="no-data-badge">Not enough data</span>`
-      : '';
-    const requiredNote = s.required
-      ? ' <span class="text-xs text-gray-500">(required)</span>'
-      : '';
-
-    grid.insertAdjacentHTML('beforeend', `
-      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''} ${noData ? 'no-data' : ''}" data-section="${escapeHtml(s.section_id)}">
-        <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
-        <span class="text-sm label-text">${escapeHtml(s.label)}${requiredNote}</span>
-        ${badge}
-      </label>
-    `);
-  });
-  grid.querySelectorAll('label[data-section]').forEach(el => {
-    el.addEventListener('click', e => {
-      const id = el.dataset.section;
-      const cb = el.querySelector('input');
-      if (cb.disabled) return;
-      if (state.selectedSections.has(id)) {
-        state.selectedSections.delete(id);
-        el.classList.remove('selected');
-        cb.checked = false;
-      } else {
-        state.selectedSections.add(id);
-        el.classList.add('selected');
-        cb.checked = true;
-      }
-      e.preventDefault();
-    });
-  });
-}
-
-function renderDeckSections() {
-  state.selectedDeckSections = new Set(state.selectedSections);
-
-  const grid = document.getElementById('deck-sections-grid');
-  grid.innerHTML = '';
-  state.sections.forEach(s => {
-    if (s.section_id === 'TITLE_OVERVIEW') return;
-
-    const noData = state.noDataSections.has(s.section_id);
-    const isSel = state.selectedDeckSections.has(s.section_id);
-
-    const badge = noData
-      ? `<span class="no-data-badge">Not enough data</span>`
-      : '';
-    const requiredNote = s.required
-      ? ' <span class="text-xs text-gray-500">(required)</span>'
-      : '';
-
-    grid.insertAdjacentHTML('beforeend', `
-      <label class="section-chip ${isSel ? 'selected' : ''} ${s.required ? 'required' : ''} ${noData ? 'no-data' : ''}" data-deck-section="${escapeHtml(s.section_id)}">
-        <input type="checkbox" ${isSel ? 'checked' : ''} ${s.required ? 'disabled' : ''} class="rounded" />
-        <span class="text-sm label-text">${escapeHtml(s.label)}${requiredNote}</span>
-        ${badge}
-      </label>
-    `);
-  });
-  grid.querySelectorAll('label[data-deck-section]').forEach(el => {
-    el.addEventListener('click', e => {
-      const id = el.dataset.deckSection;
-      const cb = el.querySelector('input');
-      if (cb.disabled) return;
-      if (state.selectedDeckSections.has(id)) {
-        state.selectedDeckSections.delete(id);
-        el.classList.remove('selected');
-        cb.checked = false;
-      } else {
-        state.selectedDeckSections.add(id);
-        el.classList.add('selected');
-        cb.checked = true;
-      }
-      e.preventDefault();
-    });
-  });
-}
-
-function selectAllSections() {
-  state.selectedSections = new Set(state.sections.map(s => s.section_id));
-  document.querySelectorAll('#sections-grid label').forEach(el => {
-    el.classList.add('selected');
-    const cb = el.querySelector('input');
-    if (!cb.disabled) cb.checked = true;
-  });
-}
-function selectNoSections() {
-  state.selectedSections.clear();
-  document.querySelectorAll('#sections-grid label').forEach(el => {
-    const cb = el.querySelector('input');
-    if (cb.disabled) {
-      state.selectedSections.add(el.dataset.section);
-      return;
-    }
-    el.classList.remove('selected');
-    cb.checked = false;
-  });
-}
-function selectAllDeckSections() {
-  state.selectedDeckSections = new Set(state.sections.map(s => s.section_id));
-  document.querySelectorAll('#deck-sections-grid label').forEach(el => {
-    el.classList.add('selected');
-    const cb = el.querySelector('input');
-    if (!cb.disabled) cb.checked = true;
-  });
-}
-function selectNoDeckSections() {
-  state.selectedDeckSections.clear();
-  document.querySelectorAll('#deck-sections-grid label').forEach(el => {
-    const cb = el.querySelector('input');
-    if (cb.disabled) {
-      state.selectedDeckSections.add(el.dataset.deckSection);
-      return;
-    }
-    el.classList.remove('selected');
-    cb.checked = false;
-  });
-}
-
-document.querySelectorAll('[data-output]').forEach(el => {
-  el.addEventListener('click', () => {
-    document.querySelectorAll('[data-output]').forEach(x => x.classList.remove('selected'));
-    el.classList.add('selected');
-    state.outputType = el.dataset.output;
-    const input = el.querySelector('input');
-    if (input) input.checked = true;
-    updateConditionalUI();
-  });
-});
-
-document.getElementById('exec-summary-input').addEventListener('input', e => {
-  state.execSummary = e.target.value;
-  state.execUserEdited = true;
-  document.getElementById('summary-count').textContent = e.target.value.length;
-  updateVariantHint();
-});
-
-document.getElementById('deck-mode').addEventListener('change', e => {
-  state.deckMode = e.target.value;
-  updateConditionalUI();
-});
-
-function updateConditionalUI() {
-  const label = document.getElementById('onepager-sections-label');
-  const advanced = document.getElementById('advanced-options');
-  const customDeck = document.getElementById('custom-deck-section');
-
-  if (state.outputType === 'slide_deck') {
-    label.textContent = 'Slide Deck Sections';
-  } else {
-    label.textContent = 'One Pager Sections';
-  }
-
-  const showAdvanced = state.outputType === 'both';
-  advanced.classList.toggle('hidden', !showAdvanced);
-
-  const showCustomDeck = showAdvanced && state.deckMode === 'custom';
-  customDeck.classList.toggle('hidden', !showCustomDeck);
-  if (showCustomDeck) {
-    renderDeckSections();
-  }
-}
-
-// ----- Step 4 + 5: Generate -----
-
-async function startGeneration() {
-  goToStep(4);
-
-  const list = document.getElementById('progress-list');
-  const steps = [
-    'Reading EOC Data',
-    'Validating Campaign Data',
-    state.outputType === 'slide_deck' ? null : 'Populating One Pager',
-    state.outputType === 'one_pager' ? null : 'Building Slide Deck',
-    'Final Polish',
-  ].filter(Boolean);
-
-  list.innerHTML = steps.map((s, i) =>
-    `<div class="prog-item flex items-center gap-3 p-3 bg-gray-50 rounded-lg" data-i="${i}">
-      <span class="prog-icon w-5 h-5 inline-block text-gray-400">○</span>
-      <span class="text-sm">${escapeHtml(s)}</span>
-    </div>`).join('');
-
-  for (let i = 0; i < steps.length - 1; i++) {
-    setTimeout(() => markStep(i, 'active'), i * 400);
-    setTimeout(() => markStep(i, 'done'), (i + 1) * 400);
-  }
-  setTimeout(() => markStep(steps.length - 1, 'active'), (steps.length - 1) * 400);
-
-  const isDeckOnly = state.outputType === 'slide_deck';
-  const primarySections = [...state.selectedSections];
-  const finalDeckSections = isDeckOnly
-    ? primarySections
-    : [...state.selectedDeckSections];
-
-  const fd = new FormData();
-  fd.append('eoc_file', state.file);
-  fd.append('output_type', state.outputType);
-  fd.append('selected_sections', JSON.stringify(primarySections));
-  fd.append('deck_mode', isDeckOnly ? 'custom' : state.deckMode);
-  fd.append('custom_deck_sections', JSON.stringify(finalDeckSections));
-  fd.append('exec_summary', state.execSummary || '');
-
-  try {
-    const res = await fetch('/api/generate', { method: 'POST', body: fd });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ detail: 'Generation failed' }));
-      throw new Error(err.detail || 'Generation failed');
-    }
-    const data = await res.json();
-    markStep(steps.length - 1, 'done');
-    setTimeout(() => showDone(data), 500);
-  } catch (err) {
-    list.insertAdjacentHTML('beforeend',
-      `<div class="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">⚠ ${escapeHtml(err.message)}</div>
-       <button class="btn-ghost mt-4" onclick="goToStep(3)">← Try again</button>`);
-  }
-}
-
-function markStep(i, status) {
-  const el = document.querySelector(`.prog-item[data-i="${i}"]`);
-  if (!el) return;
-  const icon = el.querySelector('.prog-icon');
-  if (status === 'active') { icon.innerHTML = '<svg class="spinner w-5 h-5" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="#2563eb" stroke-width="3" stroke-dasharray="40 60"/></svg>'; }
-  else if (status === 'done') { icon.innerHTML = '<span class="text-green-600">✓</span>'; }
-}
-
-function showDone(data) {
-  goToStep(5);
-
-  // Total time from EOC upload completing → Done screen
-  const totalSec = state.generationStart
-    ? Math.floor((Date.now() - state.generationStart) / 1000)
-    : 0;
-  const timeStr = totalSec
-    ? `Built in ${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')} · `
-    : '';
-  document.getElementById('done-meta').textContent =
-    `${timeStr}Run ID ${data.run_id.slice(0, 8)} · ${new Date().toLocaleString()}`;
-
-  const dl = document.getElementById('done-downloads');
-  dl.innerHTML = '';
-  if (data.one_pager_url) {
-    dl.insertAdjacentHTML('beforeend', `
-      <a href="${escapeHtml(data.one_pager_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3">
-        <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
-          <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-        </div>
-        <div>
-          <div class="font-medium">One Pager</div>
-          <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
-        </div>
-      </a>`);
-  }
-  if (data.deck_url) {
-    dl.insertAdjacentHTML('beforeend', `
-      <a href="${escapeHtml(data.deck_url)}" class="card p-5 hover:border-blue-500 hover:shadow-sm transition text-left flex items-start gap-3">
-        <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0">
-          <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"/></svg>
-        </div>
-        <div>
-          <div class="font-medium">Slide Deck</div>
-          <div class="text-xs text-gray-500 mt-1">.pptx · click to download</div>
-        </div>
-      </a>`);
-  }
 }
 </script>
 
