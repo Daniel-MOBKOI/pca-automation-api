@@ -5,13 +5,13 @@ Web-app endpoints for the PCA Automation Generator.
 
 Lives at: app/web_routes.py (alongside app/main.py)
 
-v5 changes:
-- /logout now redirects to /web (not /, which is owned by main.py for the
-  legacy GPT health endpoint and returns JSON)
-- Smart filename renaming: generated .pptx files are renamed to
-  <CampaignName>_<Type>_<DDMMYY>.pptx so users can recognise them in
-  their Downloads folder. The rename happens after main.py writes the
-  file but before we store the path in the database.
+v6 changes:
+- Claude API exec summary: /api/validate now calls Anthropic claude-haiku-4-5
+  to generate a human-narrative exec summary from campaign data. Falls back
+  silently to the JS template variants if the API key is missing or the call
+  fails. The result is returned as `claude_exec_summary` in the validate response.
+- Batch upload support: /api/generate is unchanged — the frontend calls it
+  once per EOC in parallel. No backend changes needed for batch.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import httpx
 from fastapi import (
     APIRouter,
     Depends,
@@ -61,6 +62,8 @@ FILE_RETENTION_DAYS = int(os.getenv("FILE_RETENTION_DAYS", "30"))
 CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 
 PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 
 # ----- Database -------------------------------------------------------------
@@ -197,17 +200,6 @@ def _ensure_cleanup_task_running() -> None:
 
 
 def _safe_filename_part(s: str, max_len: int = 60) -> str:
-    """
-    Slugify a string for use in a filename:
-      - replace any run of non-alphanumeric chars with "_"
-      - collapse repeated underscores
-      - trim leading/trailing underscores
-      - cap length
-    Examples:
-      "Prada Eyewear FW25"          -> "Prada_Eyewear_FW25"
-      "Rolex The Oscars UK 2026"    -> "Rolex_The_Oscars_UK_2026"
-      "Church's - SS26"             -> "Church_s_SS26"
-    """
     if not s:
         return "PCA"
     cleaned = re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")
@@ -216,40 +208,22 @@ def _safe_filename_part(s: str, max_len: int = 60) -> str:
 
 
 def _smart_filename(campaign_name: str, doc_type: str) -> str:
-    """
-    Build the desired download filename:
-        <CampaignName>_<Type>_<DDMMYY>.pptx
-    e.g. Prada_Eyewear_FW25_One_Pager_290526.pptx
-    """
-    # Daniel's preferred date format is DDMMYY (no separators)
     date_part = datetime.utcnow().strftime("%d%m%y")
     name = _safe_filename_part(campaign_name or "PCA")
     return f"{name}_{doc_type}_{date_part}.pptx"
 
 
 def _rename_generated_file(original_filename: str, new_filename: str) -> str:
-    """
-    Rename a freshly-generated file in GENERATED_FILES_DIR.
-    Falls back to the original filename if the rename fails (e.g. collision)
-    so the user always gets a working download even if naming is imperfect.
-    """
     try:
         src = GENERATED_FILES_DIR / Path(original_filename).name
         if not src.exists():
             return Path(original_filename).name
 
-        # Avoid collisions if a file with the same target name already exists
-        # (e.g. two PCAs generated in the same minute for the same campaign).
         dst = GENERATED_FILES_DIR / new_filename
-        if dst.exists() and src != dst:
-            stem = dst.stem
-            counter = 2
-            while True:
-                candidate = GENERATED_FILES_DIR / f"{stem}_{counter}.pptx"
-                if not candidate.exists():
-                    dst = candidate
-                    break
-                counter += 1
+        # Avoid collisions by appending a short uuid fragment
+        if dst.exists():
+            stem = Path(new_filename).stem
+            dst = GENERATED_FILES_DIR / f"{stem}_{uuid.uuid4().hex[:6]}.pptx"
 
         src.rename(dst)
         return dst.name
@@ -258,19 +232,106 @@ def _rename_generated_file(original_filename: str, new_filename: str) -> str:
         return Path(original_filename).name
 
 
-# ----- Auth -----------------------------------------------------------------
+# ----- Claude API exec summary ----------------------------------------------
 
-from authlib.integrations.starlette_client import OAuth, OAuthError
+
+async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
+    """
+    Call Claude claude-haiku-4-5 to write a natural exec summary paragraph from
+    the validated campaign data. Returns None on any failure so the frontend
+    can fall back to its template variants silently.
+    """
+    if not ANTHROPIC_API_KEY:
+        return None
+
+    # Build a compact data block to send to Claude
+    i = summary_inputs or {}
+    data_lines = []
+    if i.get("campaign_name"):  data_lines.append(f"Campaign: {i['campaign_name']}")
+    if i.get("client"):         data_lines.append(f"Client: {i['client']}")
+    if i.get("markets"):        data_lines.append(f"Markets: {i['markets']}")
+    if i.get("live_dates"):     data_lines.append(f"Live dates: {i['live_dates']}")
+    if i.get("delivered_impressions"): data_lines.append(f"Delivered impressions: {i['delivered_impressions']}")
+    if i.get("ctr"):            data_lines.append(f"CTR: {i['ctr']}")
+    if i.get("engagement_rate"):data_lines.append(f"Engagement rate: {i['engagement_rate']}")
+    if i.get("vcr"):            data_lines.append(f"VCR: {i['vcr']}")
+    if i.get("on_screen_rate"): data_lines.append(f"On-screen rate: {i['on_screen_rate']}")
+    if i.get("budget"):         data_lines.append(f"Budget: {i['budget']}")
+    if i.get("delivery_incl_av"): data_lines.append(f"Delivery incl. AV: {i['delivery_incl_av']}")
+    if i.get("added_value_worth"): data_lines.append(f"Added value: {i['added_value_worth']}")
+
+    # Top performers
+    for key, label in [("top_ctr", "Top CTR titles"), ("top_engagement_rate", "Top engagement titles"), ("top_vcr", "Top VCR titles")]:
+        items = i.get(key)
+        if isinstance(items, list) and items:
+            top = ", ".join(x.get("name", "") for x in items[:3] if x.get("name"))
+            if top:
+                data_lines.append(f"{label}: {top}")
+
+    if not data_lines:
+        return None
+
+    prompt = (
+        "You are writing the executive summary for a premium digital advertising post-campaign analysis (PCA) report. "
+        "Write a single, fluent paragraph of 3-4 sentences that a senior account manager would be proud to send to a client. "
+        "The tone should be confident, human, and results-focused — not corporate or template-sounding. "
+        "Highlight the standout metrics and top performers naturally. "
+        "Do not use bullet points, headers, or markdown. Output only the paragraph, nothing else.\n\n"
+        "Campaign data:\n" + "\n".join(data_lines)
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        text = data["content"][0]["text"].strip()
+        return text if text else None
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+# ----- Auth helpers ---------------------------------------------------------
+
 from starlette.middleware.sessions import SessionMiddleware
+
+SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-secret-change-me")
+
+router = APIRouter()
+templates = Jinja2Templates(directory=str(WEB_TEMPLATES_DIR))
+
+
+def current_user(request: Request) -> Optional[Dict]:
+    return request.session.get("user")
+
+
+def require_user(request: Request) -> Dict:
+    user = current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+# ----- Auth routes ----------------------------------------------------------
+
+from authlib.integrations.starlette_client import OAuth
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-ALLOWED_EMAIL_DOMAIN = os.getenv("ALLOWED_EMAIL_DOMAIN", "")
-SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-render-env-vars")
-APP_BASE_URL = os.getenv(
-    "PUBLIC_BASE_URL",
-    "https://pca-modular-builder-v12.onrender.com",
-)
+ALLOWED_DOMAIN = os.getenv("ALLOWED_DOMAIN", "mobkoi.com")
 
 oauth = OAuth()
 oauth.register(
@@ -282,53 +343,26 @@ oauth.register(
 )
 
 
-def current_user(request: Request) -> Optional[Dict[str, Any]]:
-    return request.session.get("user")
-
-
-def require_user(request: Request) -> Dict[str, Any]:
-    user = current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return user
-
-
-# ----- Router ---------------------------------------------------------------
-
-router = APIRouter()
-templates = Jinja2Templates(directory=str(WEB_TEMPLATES_DIR))
-
-
 @router.get("/login")
 async def login(request: Request):
-    redirect_uri = f"{APP_BASE_URL}/auth/callback"
+    redirect_uri = request.url_for("auth_callback")
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
 @router.get("/auth/callback")
 async def auth_callback(request: Request):
-    try:
-        token = await oauth.google.authorize_access_token(request)
-    except OAuthError as err:
-        return JSONResponse({"error": str(err)}, status_code=400)
+    token = await oauth.google.authorize_access_token(request)
+    user_info = token.get("userinfo") or {}
+    email = user_info.get("email", "")
 
-    user_info = token.get("userinfo")
-    if not user_info:
-        return JSONResponse({"error": "No user info returned"}, status_code=400)
-
-    email = (user_info.get("email") or "").lower()
-    if ALLOWED_EMAIL_DOMAIN and not email.endswith("@" + ALLOWED_EMAIL_DOMAIN.lower()):
-        return templates.TemplateResponse(
-            request,
-            "denied.html",
-            {"email": email, "allowed_domain": ALLOWED_EMAIL_DOMAIN},
-            status_code=403,
-        )
+    if not email.endswith(f"@{ALLOWED_DOMAIN}"):
+        return RedirectResponse(url="/denied")
 
     with db_connect() as conn:
         conn.execute(
-            """INSERT OR IGNORE INTO users (email, name, picture, created_at)
-               VALUES (?, ?, ?, ?)""",
+            """INSERT INTO users (email, name, picture, created_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(email) DO UPDATE SET name=excluded.name, picture=excluded.picture""",
             (email, user_info.get("name"), user_info.get("picture"), datetime.utcnow().isoformat()),
         )
 
@@ -342,8 +376,6 @@ async def auth_callback(request: Request):
 
 @router.get("/logout")
 async def logout(request: Request):
-    # SNAG FIX: redirect to /web (not /) so users see the landing page,
-    # not the legacy JSON health endpoint owned by main.py.
     request.session.clear()
     return RedirectResponse(url="/web")
 
@@ -392,6 +424,11 @@ async def history_page(request: Request):
     )
 
 
+@router.get("/denied")
+async def denied_page(request: Request):
+    return templates.TemplateResponse(request, "denied.html", {"user": None})
+
+
 # ----- API ------------------------------------------------------------------
 
 
@@ -438,11 +475,18 @@ async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
             traceback.print_exc()
             raise HTTPException(status_code=400, detail=f"Validation failed: {exc}")
 
+    compact = compact_parsed_result(parsed)
+    summary_inputs = compact.get("summary_inputs") or {}
+
+    # Claude API exec summary — runs async, falls back to None on failure
+    claude_summary = await _claude_exec_summary(summary_inputs)
+
     return JSONResponse({
         "status": "validated",
         "app_version": APP_VERSION,
         "filename": eoc_file.filename,
-        **compact_parsed_result(parsed),
+        "claude_exec_summary": claude_summary,  # None if unavailable
+        **compact,
     })
 
 
@@ -498,7 +542,6 @@ async def api_generate(
         mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(exec_summary, mapped_values)
         summary_blob = compact_parsed_result(parsed)
 
-        # Pull campaign name from the parsed data for use in download filenames
         campaign_name = (
             (summary_blob.get("summary_inputs") or {}).get("campaign_name")
             or mapped_values.get("CAMPAIGN_NAME")
@@ -594,6 +637,19 @@ async def api_get_run(run_id: str, user=Depends(require_user)):
     if not row:
         raise HTTPException(status_code=404, detail="Run not found")
     return dict(row)
+
+
+@router.get("/files/{filename}")
+async def serve_file(filename: str, user=Depends(require_user)):
+    from fastapi.responses import FileResponse
+    file_path = GENERATED_FILES_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found or expired")
+    return FileResponse(
+        path=str(file_path),
+        media_type=PPTX_MIME_TYPE,
+        filename=filename,
+    )
 
 
 # ----- Registration ---------------------------------------------------------
