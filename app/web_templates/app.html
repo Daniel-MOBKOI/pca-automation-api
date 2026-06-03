@@ -169,6 +169,7 @@ const state = {
   activeTab: 0,
   generationStart: null,
   regenTargetIdx: null,
+  langRevert: null,
 };
 
 function makeEoc(file) {
@@ -178,6 +179,7 @@ function makeEoc(file) {
     status: 'pending',
     errorMsg: '',
     outputType: 'one_pager',
+    language: 'en',
     selectedSections: new Set(),
     selectedDeckSections: new Set(),
     deckMode: 'matching',
@@ -421,19 +423,39 @@ function renderActivePanel() {
 
   container.innerHTML = `
     <div class="card-elev p-8 ${flushClass}">
-      <div class="mb-8">
-        <div class="text-sm font-medium mb-3">What Should I Build?</div>
-        <div class="grid grid-cols-3 gap-3" id="output-chips-${idx}">
-          ${['one_pager','slide_deck','both'].map(val => {
-            const labels={one_pager:'One Pager',slide_deck:'Full Deck',both:'Both'};
-            const icons={one_pager:'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',slide_deck:'M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z',both:'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2'};
-            const sel = eoc.outputType === val;
-            return `<label class="output-chip ${sel?'selected':''}" data-output="${val}" onclick="setOutputType(${idx},'${val}',this)">
-              <input type="radio" name="output_type_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>
-              <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="${icons[val]}"/></svg>
-              <div class="text-sm mt-2 ${sel?'font-medium':''}">${labels[val]}</div>
-            </label>`;
-          }).join('')}
+      <div class="grid grid-cols-3 gap-6 mb-8">
+        <div class="col-span-2">
+          <div class="text-sm font-medium mb-3">What Should I Build?</div>
+          <div class="grid grid-cols-3 gap-3" id="output-chips-${idx}">
+            ${['one_pager','slide_deck','both'].map(val => {
+              const labels={one_pager:'One Pager',slide_deck:'Full Deck',both:'Both'};
+              const icons={one_pager:'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',slide_deck:'M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z',both:'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2'};
+              const sel = eoc.outputType === val;
+              return `<label class="output-chip ${sel?'selected':''}" data-output="${val}" onclick="setOutputType(${idx},'${val}',this)">
+                <input type="radio" name="output_type_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>
+                <svg class="w-7 h-7 mx-auto text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" d="${icons[val]}"/></svg>
+                <div class="text-sm mt-2 ${sel?'font-medium':''}">${labels[val]}</div>
+              </label>`;
+            }).join('')}
+          </div>
+        </div>
+        <div class="col-span-1">
+          <div class="text-sm font-medium mb-3">Language</div>
+          <div class="grid grid-cols-2 gap-3" id="language-chips-${idx}">
+            ${['en','ja'].map(val => {
+              const labels={en:'English',ja:'日本語'};
+              const flags={
+                en:`<svg class="mx-auto block" width="30" height="20" viewBox="0 0 30 20"><defs><clipPath id="uk-${idx}"><rect width="30" height="20" rx="2"/></clipPath></defs><g clip-path="url(#uk-${idx})"><rect width="30" height="20" fill="#012169"/><path d="M0,0 L30,20 M30,0 L0,20" stroke="#fff" stroke-width="4"/><path d="M0,0 L30,20 M30,0 L0,20" stroke="#C8102E" stroke-width="2"/><rect x="12" y="0" width="6" height="20" fill="#fff"/><rect x="0" y="7" width="30" height="6" fill="#fff"/><rect x="13.2" y="0" width="3.6" height="20" fill="#C8102E"/><rect x="0" y="8.2" width="30" height="3.6" fill="#C8102E"/></g></svg>`,
+                ja:`<svg class="mx-auto block" width="30" height="20" viewBox="0 0 30 20"><rect width="30" height="20" rx="2" fill="#fff" stroke="#e5e7eb" stroke-width="0.5"/><circle cx="15" cy="10" r="5.6" fill="#bc002d"/></svg>`
+              };
+              const sel = eoc.language === val;
+              return `<label class="output-chip ${sel?'selected':''}" data-language="${val}" onclick="setLanguage(${idx},'${val}',this)">
+                <input type="radio" name="language_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>
+                ${flags[val]}
+                <div class="text-sm mt-2 ${sel?'font-medium':''}">${labels[val]}</div>
+              </label>`;
+            }).join('')}
+          </div>
         </div>
       </div>
 
@@ -534,10 +556,19 @@ function onRegenerateClick(idx) {
 }
 function cancelRegenerate() {
   document.getElementById('regen-warning-modal').classList.add('hidden');
+  // If a language switch triggered this modal, undo the switch so the kept
+  // summary and the deck language stay consistent.
+  if (state.langRevert) {
+    const {idx,prevLang}=state.langRevert;
+    state.eocs[idx].language=prevLang;
+    state.langRevert=null;
+    renderActivePanel();
+  }
   state.regenTargetIdx = null;
 }
 function confirmRegenerate() {
   document.getElementById('regen-warning-modal').classList.add('hidden');
+  state.langRevert = null;
   if (state.regenTargetIdx !== null) doRegenerate(state.regenTargetIdx);
   state.regenTargetIdx = null;
 }
@@ -558,7 +589,7 @@ async function doRegenerate(idx) {
     const res = await fetch('/api/exec-summary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ summary_inputs: (eoc.validation && eoc.validation.summary_inputs) || {} }),
+      body: JSON.stringify({ summary_inputs: (eoc.validation && eoc.validation.summary_inputs) || {}, language: eoc.language }),
     });
     const data = await res.json();
     if (data.summary) {
@@ -693,6 +724,24 @@ function selectNoDeckSections(idx){const eoc=state.eocs[idx];eoc.selectedDeckSec
 function setOutputType(idx,val,el){const eoc=state.eocs[idx];eoc.outputType=val;document.querySelectorAll(`#output-chips-${idx} .output-chip`).forEach(c=>c.classList.remove('selected'));el.classList.add('selected');document.getElementById(`sections-label-${idx}`).textContent=val==='slide_deck'?'Slide Deck Sections':'One Pager Sections';document.getElementById(`advanced-options-${idx}`).classList.toggle('hidden',val!=='both');document.getElementById(`custom-deck-section-${idx}`).classList.toggle('hidden',!(val==='both'&&eoc.deckMode==='custom'));}
 function setDeckMode(idx,val){state.eocs[idx].deckMode=val;document.getElementById(`custom-deck-section-${idx}`).classList.toggle('hidden',val!=='custom');if(val==='custom')renderDeckSectionsGrid(idx);}
 
+function setLanguage(idx,val,el){
+  const eoc=state.eocs[idx];
+  if(eoc.language===val)return;
+  const prevLang=eoc.language;
+  eoc.language=val;
+  document.querySelectorAll(`#language-chips-${idx} .output-chip`).forEach(c=>c.classList.remove('selected'));
+  el.classList.add('selected');
+  // The summary must match the chosen language. If the user has hand-edited it,
+  // warn before discarding (reuse the Regenerate modal); otherwise regenerate now.
+  if(eoc.execUserEdited){
+    state.regenTargetIdx=idx;
+    state.langRevert={idx,prevLang};
+    document.getElementById('regen-warning-modal').classList.remove('hidden');
+  } else {
+    doRegenerate(idx);
+  }
+}
+
 // ============================================================
 // STEP 4 + 5 — Generate + Done
 // ============================================================
@@ -735,6 +784,7 @@ async function generateOne(eoc,idx) {
   fd.append('deck_mode',isDeckOnly?'custom':eoc.deckMode);
   fd.append('custom_deck_sections',JSON.stringify(isDeckOnly?[...eoc.selectedSections]:[...eoc.selectedDeckSections]));
   fd.append('exec_summary',eoc.execSummary||'');
+  fd.append('language',eoc.language||'en');
   try {
     const res=await fetch('/api/generate',{method:'POST',body:fd});
     if(!res.ok){const err=await res.json().catch(()=>({detail:'Generation failed'}));throw new Error(err.detail||'Generation failed');}

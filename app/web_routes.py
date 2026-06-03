@@ -272,7 +272,7 @@ def _truncate_to_sentence(text: str, max_chars: int) -> str:
     return (chunk[:pos] if pos > 0 else chunk).rstrip()
 
 
-async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
+async def _claude_exec_summary(summary_inputs: Dict[str, Any], language: str = "en") -> Optional[str]:
     """
     Ask Claude to write a single-paragraph exec summary from validated EOC data.
 
@@ -331,6 +331,13 @@ async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
         "Do not use bullet points, headers, or markdown. Output only the paragraph, nothing else.\n\n"
         "Campaign data:\n" + "\n".join(data_lines)
     )
+
+    if language and language.lower() == "ja":
+        prompt += (
+            "\n\nIMPORTANT: Write the entire paragraph in natural, business-appropriate "
+            "Japanese (です・ます調) suitable for sending to a client. Keep brand names, "
+            "campaign names, and all metric figures exactly as given."
+        )
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -739,7 +746,8 @@ async def api_exec_summary(request: Request):
     except Exception:
         body = {}
     summary_inputs = (body or {}).get("summary_inputs") or {}
-    summary = await _claude_exec_summary(summary_inputs)
+    language = (body or {}).get("language") or "en"
+    summary = await _claude_exec_summary(summary_inputs, language=language)
     return JSONResponse({"summary": summary})
 
 
@@ -752,6 +760,7 @@ async def api_generate(
     deck_mode: str = Form("matching"),
     custom_deck_sections: str = Form("[]"),
     exec_summary: str = Form(""),
+    language: str = Form("en"),
 ):
     user = require_user(request)
 
@@ -763,6 +772,9 @@ async def api_generate(
         build_grouped_stacked_modular_ppt,
         build_filtered_slide_deck_ppt,
         SlideDeckFromEocRequest,
+        template_path_for,
+        MODULAR_TEMPLATE_PATH,
+        SLIDE_DECK_TEMPLATE_PATH,
     )
 
     try:
@@ -806,6 +818,7 @@ async def api_generate(
                 op_result = build_grouped_stacked_modular_ppt(
                     selected_sections=section_list,
                     placeholder_values=mapped_values,
+                    template_path=template_path_for(MODULAR_TEMPLATE_PATH, language),
                 )
                 original = Path(op_result["filename"]).name
                 new_name = _smart_filename(campaign_name, "One_Pager")
@@ -823,6 +836,7 @@ async def api_generate(
                 deck_result = build_filtered_slide_deck_ppt(
                     request=deck_request,
                     placeholder_values=mapped_values,
+                    template_path=template_path_for(SLIDE_DECK_TEMPLATE_PATH, language),
                 )
                 original = Path(deck_result["filename"]).name
                 new_name = _smart_filename(campaign_name, "Slide_Deck")

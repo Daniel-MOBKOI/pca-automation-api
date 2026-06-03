@@ -66,6 +66,16 @@ SLIDE_DECK_TEMPLATE_PATH = resolve_existing_path(
     ],
 )
 
+def template_path_for(base_path: Path, language: str) -> Path:
+    """Return the language-specific master (e.g. *_ja.pptx) if it exists,
+    otherwise fall back to the base English master."""
+    if language and language.lower() == "ja":
+        ja = base_path.with_name(f"{base_path.stem}_ja{base_path.suffix}")
+        if ja.exists():
+            return ja
+    return base_path
+
+
 SECTION_REGISTRY_PATH = resolve_existing_path(
     "SECTION_REGISTRY_PATH",
     [
@@ -1959,14 +1969,16 @@ def build_grouped_stacked_modular_ppt(
     placeholder_values: Optional[Dict[str, Any]] = None,
     top_margin_px: int = 100,
     bottom_margin_px: int = 100,
-    section_spacing_px: int = 60
+    section_spacing_px: int = 60,
+    template_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
 
-    if not MODULAR_TEMPLATE_PATH.exists():
-        raise HTTPException(status_code=500, detail=f"Modular template not found at {MODULAR_TEMPLATE_PATH}")
+    tpl = template_path or MODULAR_TEMPLATE_PATH
+    if not tpl.exists():
+        raise HTTPException(status_code=500, detail=f"Modular template not found at {tpl}")
 
     registry = load_section_registry()
-    source_prs = Presentation(str(MODULAR_TEMPLATE_PATH))
+    source_prs = Presentation(str(tpl))
     detected_sections = detect_template_sections(source_prs)
     sections_to_build = ordered_selected_sections(registry, selected_sections)
 
@@ -2015,7 +2027,7 @@ def build_grouped_stacked_modular_ppt(
             total_height += spacing
 
     output_prs = create_output_presentation_with_source_theme(
-        source_template_path=MODULAR_TEMPLATE_PATH,
+        source_template_path=tpl,
         slide_height=total_height
     )
 
@@ -2290,15 +2302,17 @@ def replace_placeholders_in_presentation(prs: Presentation, placeholder_values: 
 def build_filtered_slide_deck_ppt(
     request: SlideDeckFromEocRequest,
     placeholder_values: Dict[str, Any],
+    template_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
 
-    if not SLIDE_DECK_TEMPLATE_PATH.exists():
+    tpl = template_path or SLIDE_DECK_TEMPLATE_PATH
+    if not tpl.exists():
         raise HTTPException(
             status_code=500,
-            detail=f"Slide deck template not found at {SLIDE_DECK_TEMPLATE_PATH}"
+            detail=f"Slide deck template not found at {tpl}"
         )
 
-    prs = Presentation(str(SLIDE_DECK_TEMPLATE_PATH))
+    prs = Presentation(str(tpl))
 
     deck_sections = resolve_slide_deck_sections(request)
     filter_meta = filter_slide_deck_by_sections(prs, deck_sections)
