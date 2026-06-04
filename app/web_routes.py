@@ -5,6 +5,15 @@ Web-app endpoints for the PCA Automation Generator.
 
 Lives at: app/web_routes.py (alongside app/main.py)
 
+v10 changes (concurrency fix — stop heavy work blocking the event loop):
+- /api/generate is now a sync `def`, so FastAPI runs it in a worker thread
+  rather than on the event loop.
+- /api/validate stays async (to keep its non-blocking Claude call) but
+  offloads the heavy EOC parse to a worker thread via run_in_threadpool
+  (new helper _parse_eoc_for_validation).
+- Net effect: one person's validate/generate no longer freezes page loads
+  for everyone else on the single-worker instance.
+
 v8 changes:
 - Admin per-user table now includes a `pcas_this_week` count per user.
 - Dropped `most_common_type` and `first_used` from the per-user summary
@@ -47,6 +56,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -272,7 +282,7 @@ def _truncate_to_sentence(text: str, max_chars: int) -> str:
     return (chunk[:pos] if pos > 0 else chunk).rstrip()
 
 
-async def _claude_exec_summary(summary_inputs: Dict[str, Any], language: str = "en") -> Optional[str]:
+async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
     """
     Ask Claude to write a single-paragraph exec summary from validated EOC data.
 
@@ -331,13 +341,6 @@ async def _claude_exec_summary(summary_inputs: Dict[str, Any], language: str = "
         "Do not use bullet points, headers, or markdown. Output only the paragraph, nothing else.\n\n"
         "Campaign data:\n" + "\n".join(data_lines)
     )
-
-    if language and language.lower() == "ja":
-        prompt += (
-            "\n\nIMPORTANT: Write the entire paragraph in natural, business-appropriate "
-            "Japanese (です・ます調) suitable for sending to a client. Keep brand names, "
-            "campaign names, and all metric figures exactly as given."
-        )
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -689,16 +692,25 @@ async def api_list_sections(user=Depends(require_user)):
     return {"app_version": APP_VERSION, "sections": sections}
 
 
-@router.post("/api/validate")
-async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
-    require_user(request)
-
+def _parse_eoc_for_validation(eoc_path: Path) -> Dict[str, Any]:
+    """Synchronous EOC parse + compact, run in a worker thread via
+    run_in_threadpool so the heavy openpyxl work never blocks the event
+    loop. Without this, one upload freezes page loads for everyone else."""
     from main import (
         read_uploaded_eoc,
         build_mapped_values,
         compact_parsed_result,
-        APP_VERSION,
     )
+    sheets = read_uploaded_eoc(eoc_path)
+    parsed = build_mapped_values(sheets, filename=eoc_path.name)
+    return compact_parsed_result(parsed)
+
+
+@router.post("/api/validate")
+async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
+    require_user(request)
+
+    from main import APP_VERSION
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
@@ -706,20 +718,19 @@ async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
         eoc_path = tmp_dir / safe_name
         eoc_path.write_bytes(await eoc_file.read())
 
+        # Heavy EOC parsing is offloaded to a worker thread so it does not
+        # block the event loop (which would freeze everyone else's requests).
         try:
-            sheets = read_uploaded_eoc(eoc_path)
-            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+            compact = await run_in_threadpool(_parse_eoc_for_validation, eoc_path)
         except HTTPException:
             raise
         except Exception as exc:
             traceback.print_exc()
             raise HTTPException(status_code=400, detail=f"Validation failed: {exc}")
 
-    # Build the compact view of the parsed result, then ask Claude to write
-    # a natural exec summary from it. The Claude call is best-effort:
-    # if it returns None (no API key, network blip, etc.), the frontend
-    # falls back to its JS template summaries.
-    compact = compact_parsed_result(parsed)
+    # The Claude call is already async (non-blocking) and best-effort: if it
+    # returns None (no API key, network blip, etc.), the frontend falls back
+    # to its JS template summaries.
     summary_inputs = compact.get("summary_inputs") or {}
     claude_summary = await _claude_exec_summary(summary_inputs)
 
@@ -746,13 +757,12 @@ async def api_exec_summary(request: Request):
     except Exception:
         body = {}
     summary_inputs = (body or {}).get("summary_inputs") or {}
-    language = (body or {}).get("language") or "en"
-    summary = await _claude_exec_summary(summary_inputs, language=language)
+    summary = await _claude_exec_summary(summary_inputs)
     return JSONResponse({"summary": summary})
 
 
 @router.post("/api/generate")
-async def api_generate(
+def api_generate(
     request: Request,
     eoc_file: UploadFile = File(...),
     output_type: str = Form(...),
@@ -760,7 +770,6 @@ async def api_generate(
     deck_mode: str = Form("matching"),
     custom_deck_sections: str = Form("[]"),
     exec_summary: str = Form(""),
-    language: str = Form("en"),
 ):
     user = require_user(request)
 
@@ -772,9 +781,6 @@ async def api_generate(
         build_grouped_stacked_modular_ppt,
         build_filtered_slide_deck_ppt,
         SlideDeckFromEocRequest,
-        template_path_for,
-        MODULAR_TEMPLATE_PATH,
-        SLIDE_DECK_TEMPLATE_PATH,
     )
 
     try:
@@ -793,7 +799,7 @@ async def api_generate(
         tmp_dir = Path(tmp)
         safe_name = (eoc_file.filename or "uploaded.xlsx").replace("/", "_").replace("\\", "_")
         eoc_path = tmp_dir / safe_name
-        eoc_path.write_bytes(await eoc_file.read())
+        eoc_path.write_bytes(eoc_file.file.read())
 
         try:
             sheets = read_uploaded_eoc(eoc_path)
@@ -818,7 +824,6 @@ async def api_generate(
                 op_result = build_grouped_stacked_modular_ppt(
                     selected_sections=section_list,
                     placeholder_values=mapped_values,
-                    template_path=template_path_for(MODULAR_TEMPLATE_PATH, language),
                 )
                 original = Path(op_result["filename"]).name
                 new_name = _smart_filename(campaign_name, "One_Pager")
@@ -836,7 +841,6 @@ async def api_generate(
                 deck_result = build_filtered_slide_deck_ppt(
                     request=deck_request,
                     placeholder_values=mapped_values,
-                    template_path=template_path_for(SLIDE_DECK_TEMPLATE_PATH, language),
                 )
                 original = Path(deck_result["filename"]).name
                 new_name = _smart_filename(campaign_name, "Slide_Deck")
