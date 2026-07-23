@@ -205,7 +205,17 @@ Render disk attached: 1GB at `/var/data` (~£0.25/mo). Instance tier: Standard (
 - [ ] Get Daniel's preferred Japanese phrase for "MRC Viewability" so the JA Slide Deck template's fallback label can be updated to match the English one.
 - [ ] All of Round 6 (decimal fix, MRC rename, JA wiring fix, currency) needs a real local/staging test before pushing to `main` — none of it has been run against the live app yet, only verified via isolated logic tests and syntax checks (couldn't run the full FastAPI app in this sandbox — its SQLite init fails outside Daniel's actual environment).
 
-*(Empty items below awaiting further Phase 1 feedback from the team.)*
+**Full Phase 1 feedback doc (read 23 July 2026 via shared Google Doc link, "PCA Generator - Feedback")** — collects notes from every regional office. Items marked "Actioned" in the doc that match this session's Round 6 work: Lesan/Yuri/Zoe's currency feedback (default-to-campaign-currency, JPY, SGD/USD), Yuri's OnScreen/MRC Viewability naming, Zoe's "AV delivery shows 1.54% instead of 154%". One Actioned item in the doc that we have **not** touched this session and should verify: Yuri's "Front Page: the layout looks broken" — worth confirming whether this was fixed separately or the doc is stale on this one.
+
+Genuinely open items from the doc, not yet actioned:
+
+- [ ] **Zoe (APAC SG) — Phase 2, noted in doc:** auto-detect market as "SG" from the campaign name; add a field for rate/deliverables (e.g. "CPX SGD 1.50, 150,000 Exposures"); text-input to populate the Campaign Snapshot slide (Overview/Audience/KPIs) or accept screen recordings.
+- [ ] **Aiko (APAC JP) — Phase 2, noted in doc:** ability to update market-specific benchmarks, particularly for single-market campaigns.
+- [ ] **Gaby (US):** choose which key metrics are shown (prioritise CTR/ER/VCR/Dwell Time, de-emphasise On-Screen); Dwell Time isn't available as a reportable metric at all; consolidate Campaign Details/Objectives/Key Figures into one slide; a dedicated slide per metric with a graph + benchmark line; a summary slide listing all sites with key metrics and highlighting above-benchmark performance; some text fields (e.g. "learnings") aren't consistently populating in English; simplify/skip full analysis section for US campaigns; option to show both Mobkoi and industry benchmarks side by side.
+- [ ] **Erika (US):** metrics present in her report were reported by the tool as "not included" — needs a best-practice guide (or better fuzzy matching) for EOC column naming so the tool recognises them; general note that "the deck is bare bones."
+- [ ] **Dorine (FR), not yet actioned:** bullet points for creative on the Campaign Analysis slide; standard boilerplate text on the Campaign Snapshot Overview ("Achieve awareness for the … and qualitative clicks to site in a premium editorial environment"); make Full Deck the default output selection (not One Pager); two additional slides — Publisher Overview and Creative Performance.
+
+*(Awaiting Daniel's steer on which of the above to prioritise.)*
 
 ---
 
