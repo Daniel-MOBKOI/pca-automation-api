@@ -196,6 +196,25 @@ def clean_dimension_label(value: Any) -> str:
     return value.strip(" -")
 
 
+CURRENCY_SYMBOLS = ["£", "$", "€", "¥"]
+
+
+def detect_currency_symbol(value: Any) -> Optional[str]:
+    """Look for a known currency symbol in a raw (pre-stripped) cell value.
+
+    safe_number() strips these same symbols before parsing to a float, so by
+    the time a value reaches safe_number the symbol is normally already gone.
+    Call this on the *raw* value first (e.g. straight from the EOC cell)
+    to recover which currency the campaign is actually reported in.
+    """
+    if not isinstance(value, str):
+        return None
+    for symbol in CURRENCY_SYMBOLS:
+        if symbol in value:
+            return symbol
+    return None
+
+
 def safe_number(value: Any) -> Optional[float]:
     try:
         if value is None:
@@ -206,6 +225,7 @@ def safe_number(value: Any) -> Optional[float]:
                 .replace("£", "")
                 .replace("$", "")
                 .replace("€", "")
+                .replace("¥", "")
                 .replace("%", "")
                 .strip()
             )
@@ -236,7 +256,7 @@ def format_currency(value: Optional[float], symbol: str = "€") -> Optional[str
     return f"{symbol}{value:,.2f}"
 
 
-def format_percent(value: Any) -> Optional[str]:
+def format_percent(value: Any, always_scale: bool = False) -> Optional[str]:
     if isinstance(value, str) and "%" in value:
         return clean_text(value)
 
@@ -244,7 +264,15 @@ def format_percent(value: Any) -> Optional[str]:
     if num is None:
         return None
 
-    if num <= 1:
+    # Excel percentage-formatted cells store their raw fraction (e.g. 154%
+    # is stored as 1.54). The default heuristic below (num <= 1) exists for
+    # fields that are never expected to exceed 100%, so it can tell a true
+    # fraction (0.47 -> 47%) apart from an already-scaled plain number (47).
+    # That heuristic breaks for fields like delivery-including-AV, which
+    # regularly exceed 100% (over-delivery) and are always read as a raw
+    # Excel-percent fraction — pass always_scale=True for those so e.g.
+    # 1.54 always becomes "154%" instead of being left as "1.54%".
+    if always_scale or num <= 1:
         num = num * 100
 
     return f"{round(num, 2)}%"
@@ -1004,7 +1032,8 @@ def build_default_exec_summary(mapped: Dict[str, Any]) -> str:
     if value_available(vcr):
         metrics.append(f"VCR of {vcr}")
     if value_available(on_screen):
-        metrics.append(f"on-screen rate of {on_screen}")
+        on_screen_label = clean_text(mapped.get("PERFORMANCE_ON_SCREEN_LABEL_FULL")) or "On-Screen Rate"
+        metrics.append(f"{on_screen_label.lower()} of {on_screen}")
 
     if metrics:
         if len(metrics) == 1:
@@ -1128,10 +1157,12 @@ def build_summary_inputs(mapped: Dict[str, Any]) -> Dict[str, Any]:
         "delivery_incl_av": chat_display_value(mapped.get("DELIVERY_WITH_AV_PERCENT")),
         "added_value_worth": chat_display_value(mapped.get("ADDED_VALUE_WORTH")),
         "budget": chat_display_value(mapped.get("CAMPAIGN_BUDGET")),
+        "campaign_currency": mapped.get("CAMPAIGN_CURRENCY") or "$",
         "ctr": chat_display_value(mapped.get("PERFORMANCE_CTR")),
         "engagement_rate": chat_display_value(mapped.get("PERFORMANCE_ENGAGEMENT_RATE")),
         "vcr": chat_display_value(mapped.get("PERFORMANCE_VCR")),
         "on_screen_rate": chat_display_value(mapped.get("PERFORMANCE_ON_SCREEN")),
+        "on_screen_rate_label": chat_display_value(mapped.get("PERFORMANCE_ON_SCREEN_LABEL_FULL")) or "On-Screen Rate",
         "creative_formats": chat_display_value(mapped.get("CAMPAIGN_FORMATS")),
         "top_ctr": top("TOP_TITLES_CTR", 3),
         "top_engagement_rate": top("TOP_TITLES_ER", 3),
@@ -1172,7 +1203,7 @@ def render_validation_text(mapped: Dict[str, Any]) -> str:
         f"• **CTR:** {chat_display_value(mapped.get('PERFORMANCE_CTR'))}",
         f"• **Engagement Rate:** {chat_display_value(mapped.get('PERFORMANCE_ENGAGEMENT_RATE'))}",
         f"• **VCR:** {chat_display_value(mapped.get('PERFORMANCE_VCR'))}",
-        f"• **On-Screen Rate:** {chat_display_value(mapped.get('PERFORMANCE_ON_SCREEN'))}",
+        f"• **{mapped.get('PERFORMANCE_ON_SCREEN_LABEL_FULL') or 'On-Screen Rate'}:** {chat_display_value(mapped.get('PERFORMANCE_ON_SCREEN'))}",
         "",
         "**Creative Formats**",
         "",
@@ -1480,7 +1511,11 @@ def load_rules_master() -> Optional[Dict[str, pd.DataFrame]]:
         return None
 
 
-def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> Dict[str, Any]:
+def build_mapped_values(
+    sheets: Dict[str, pd.DataFrame],
+    filename: str = "",
+    currency_override: Optional[str] = None,
+) -> Dict[str, Any]:
     rules = load_rules_master()
     detected = detect_tables(sheets)
 
@@ -1493,7 +1528,19 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
     start_dt, end_dt = extract_dates(sheets, detected, filename)
     client_name = extract_client_name(sheets, detected, filename)
 
+    # Currency: prefer an explicit override (from the Customise-tab dropdown),
+    # otherwise detect the symbol from the raw spend/added-value-worth cells
+    # (safe_number() strips these same symbols before parsing to a float, so
+    # we have to look at the pre-stripped raw value), otherwise default to $.
+    detected_currency = None
+    if kpi_df is not None:
+        detected_currency = detect_currency_symbol(extract_kpi_value(kpi_df, "spend"))
+    if not detected_currency and delivery_df is not None:
+        detected_currency = detect_currency_symbol(extract_kpi_value(delivery_df, "delivered_av_amount"))
+    campaign_currency = currency_override or detected_currency or "$"
+
     mapped: Dict[str, Any] = {}
+    mapped["CAMPAIGN_CURRENCY"] = campaign_currency
 
     if kpi_df is not None:
         mapped["CAMPAIGN_NAME"] = clean_text(extract_kpi_value(kpi_df, "campaign"))
@@ -1503,6 +1550,7 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped["PERFORMANCE_VCR"] = format_percent(extract_kpi_value(kpi_df, "vcr"))
 
         on_screen_val = None
+        on_screen_source_key = None
         for key in ["mobkoi_on_screen", "mrc_viewability", "on_screen"]:
             col = find_col(kpi_df, key)
             if col:
@@ -1510,10 +1558,23 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
                 if isinstance(col_data, pd.DataFrame):
                     col_data = col_data.iloc[:, 0]
                 on_screen_val = first_non_empty(col_data)
+                on_screen_source_key = key
                 break
 
+        # When there's no true on-screen column and the value came from a
+        # dedicated MRC Viewability column instead, relabel the metric so the
+        # app/PPT don't misrepresent MRC Viewability data as "On-Screen Rate".
+        if on_screen_source_key == "mrc_viewability":
+            on_screen_label_short = "MRC Viewability"
+            on_screen_label_full = "MRC Viewability"
+        else:
+            on_screen_label_short = "On Screen"
+            on_screen_label_full = "On-Screen Rate"
+
         mapped["PERFORMANCE_ON_SCREEN"] = format_percent(on_screen_val)
-        mapped["CAMPAIGN_BUDGET"] = format_currency(safe_number(extract_kpi_value(kpi_df, "spend")))
+        mapped["PERFORMANCE_ON_SCREEN_LABEL"] = on_screen_label_short
+        mapped["PERFORMANCE_ON_SCREEN_LABEL_FULL"] = on_screen_label_full
+        mapped["CAMPAIGN_BUDGET"] = format_currency(safe_number(extract_kpi_value(kpi_df, "spend")), symbol=campaign_currency)
     else:
         mapped["CAMPAIGN_NAME"] = None
         mapped["DELIVERED_IMPRESSIONS"] = None
@@ -1521,6 +1582,8 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
         mapped["PERFORMANCE_ENGAGEMENT_RATE"] = None
         mapped["PERFORMANCE_VCR"] = None
         mapped["PERFORMANCE_ON_SCREEN"] = None
+        mapped["PERFORMANCE_ON_SCREEN_LABEL"] = "On Screen"
+        mapped["PERFORMANCE_ON_SCREEN_LABEL_FULL"] = "On-Screen Rate"
         mapped["CAMPAIGN_BUDGET"] = None
 
     if delivery_df is not None:
@@ -1530,8 +1593,8 @@ def build_mapped_values(sheets: Dict[str, pd.DataFrame], filename: str = "") -> 
 
         mapped["IO_OVERALL_IMPRESSIONS"] = format_number(io_val, 0)
         mapped["DELIVERED_OVERALL_AV_UNITS"] = format_number(av_units_val, 0)
-        mapped["DELIVERY_WITH_AV_PERCENT"] = format_percent(extract_kpi_value(delivery_df, "delivery_incl_av"))
-        mapped["ADDED_VALUE_WORTH"] = format_currency(av_amount_val)
+        mapped["DELIVERY_WITH_AV_PERCENT"] = format_percent(extract_kpi_value(delivery_df, "delivery_incl_av"), always_scale=True)
+        mapped["ADDED_VALUE_WORTH"] = format_currency(av_amount_val, symbol=campaign_currency)
         mapped["ADDED_VALUE_IMPRESSIONS"] = format_number(av_units_val, 0)
     else:
         mapped["IO_OVERALL_IMPRESSIONS"] = None

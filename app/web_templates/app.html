@@ -180,6 +180,8 @@ function makeEoc(file) {
     errorMsg: '',
     outputType: 'one_pager',
     language: 'en',
+    currency: 'auto',
+    currencyUserSet: false,
     selectedSections: new Set(),
     selectedDeckSections: new Set(),
     deckMode: 'matching',
@@ -359,6 +361,9 @@ function renderAllReviews() {
 
 function renderReviewCard(eoc, idx) {
   const v = eoc.validation; const inputs = v.summary_inputs || {};
+  // Pre-select the Customise-tab currency chip to whatever was auto-detected
+  // from the EOC file, unless the user has already manually picked one.
+  if (!eoc.currencyUserSet && inputs.campaign_currency) eoc.currency = inputs.campaign_currency;
   const di = Object.assign({}, inputs);
   if (di.live_dates) di.live_dates = compactDateRange(di.live_dates);
   renderTilesTo(`r${idx}-campaign`, [{key:'campaign_name',label:'Campaign'},{key:'client',label:'Client'},{key:'markets',label:'Markets'},{key:'live_dates',label:'Live Dates'}], di);
@@ -423,7 +428,7 @@ function renderActivePanel() {
 
   container.innerHTML = `
     <div class="card-elev p-8 ${flushClass}">
-      <div class="grid grid-cols-3 gap-6 mb-8">
+      <div class="grid grid-cols-4 gap-6 mb-8">
         <div class="col-span-2">
           <div class="text-sm font-medium mb-3">What Should I Build?</div>
           <div class="grid grid-cols-3 gap-3" id="output-chips-${idx}">
@@ -452,6 +457,20 @@ function renderActivePanel() {
               return `<label class="output-chip ${sel?'selected':''}" data-language="${val}" onclick="setLanguage(${idx},'${val}',this)">
                 <input type="radio" name="language_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>
                 ${flags[val]}
+                <div class="text-sm mt-2 ${sel?'font-medium':''}">${labels[val]}</div>
+              </label>`;
+            }).join('')}
+          </div>
+        </div>
+        <div class="col-span-1">
+          <div class="text-sm font-medium mb-3">Currency</div>
+          <div class="grid grid-cols-2 gap-3" id="currency-chips-${idx}">
+            ${['€','$','£','¥'].map(val => {
+              const labels={'€':'EUR','$':'USD','£':'GBP','¥':'JPY'};
+              const sel = eoc.currency === val;
+              return `<label class="output-chip ${sel?'selected':''}" data-currency="${val}" onclick="setCurrency(${idx},'${val}',this)">
+                <input type="radio" name="currency_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>
+                <div class="text-lg leading-none">${val}</div>
                 <div class="text-sm mt-2 ${sel?'font-medium':''}">${labels[val]}</div>
               </label>`;
             }).join('')}
@@ -742,6 +761,17 @@ function setLanguage(idx,val,el){
   }
 }
 
+function setCurrency(idx,val,el){
+  const eoc=state.eocs[idx];
+  eoc.currency=val;
+  eoc.currencyUserSet=true;
+  document.querySelectorAll(`#currency-chips-${idx} .output-chip`).forEach(c=>c.classList.remove('selected'));
+  el.classList.add('selected');
+  // Currency only affects the generated One Pager / Slide Deck output (budget
+  // and added-value-worth figures) — it doesn't need to regenerate the Claude
+  // summary or touch the Review screen tiles, unlike language.
+}
+
 // ============================================================
 // STEP 4 + 5 — Generate + Done
 // ============================================================
@@ -785,6 +815,9 @@ async function generateOne(eoc,idx) {
   fd.append('custom_deck_sections',JSON.stringify(isDeckOnly?[...eoc.selectedSections]:[...eoc.selectedDeckSections]));
   fd.append('exec_summary',eoc.execSummary||'');
   fd.append('language',eoc.language||'en');
+  // 'auto' means no manual override — let the backend use whatever currency
+  // it detects from the EOC file itself (defaulting to $ if none found).
+  fd.append('currency',(eoc.currency&&eoc.currency!=='auto')?eoc.currency:'');
   try {
     const res=await fetch('/api/generate',{method:'POST',body:fd});
     if(!res.ok){const err=await res.json().catch(()=>({detail:'Generation failed'}));throw new Error(err.detail||'Generation failed');}
@@ -816,7 +849,7 @@ function showDone(results) {
 // ============================================================
 // SHARED RENDERERS + UTILITIES
 // ============================================================
-function renderTilesTo(id,fields,inputs){const el=document.getElementById(id);if(!el)return;el.innerHTML='';fields.forEach(f=>{const v=inputs[f.key];if(v)el.insertAdjacentHTML('beforeend',`<div class="metric-tile"><div class="label">${escapeHtml(f.label)}</div><div class="value">${escapeHtml(v)}</div></div>`);});}
+function renderTilesTo(id,fields,inputs){const el=document.getElementById(id);if(!el)return;el.innerHTML='';fields.forEach(f=>{const v=inputs[f.key];if(v){const label=inputs[f.key+'_label']||f.label;el.insertAdjacentHTML('beforeend',`<div class="metric-tile"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(v)}</div></div>`);}});}
 function renderTopGroupsTo(cid,sid,groups,inputs){const c=document.getElementById(cid);if(!c)return;c.innerHTML='';let any=false;groups.forEach(g=>{const l=inputs[g.key];if(Array.isArray(l)&&l.length){any=true;const rows=l.map(i=>`<div class="row"><span class="name">${escapeHtml(i.name||'—')}</span><span class="val">${escapeHtml(i.value||'—')}</span></div>`).join('');c.insertAdjacentHTML('beforeend',`<div class="top-col"><h5>${escapeHtml(g.title)}</h5>${rows}</div>`);}});const s=document.getElementById(sid);if(s)s.classList.toggle('hidden',!any);}
 function renderTopMarketsFor(idx,inputs){const candidates=[[{key:'top_ctr_markets',title:'CTR'},{key:'top_engagement_rate_markets',title:'Engagement Rate'},{key:'top_vcr_markets',title:'VCR'}],[{key:'top_ctr_market',title:'CTR'},{key:'top_engagement_rate_market',title:'Engagement Rate'},{key:'top_vcr_market',title:'VCR'}],[{key:'top_markets_ctr',title:'CTR'},{key:'top_markets_engagement_rate',title:'Engagement Rate'},{key:'top_markets_vcr',title:'VCR'}],[{key:'market_top_ctr',title:'CTR'},{key:'market_top_engagement_rate',title:'Engagement Rate'},{key:'market_top_vcr',title:'VCR'}]];for(const g of candidates){if(g.some(x=>Array.isArray(inputs[x.key])&&inputs[x.key].length)){renderTopGroupsTo(`r${idx}-top-markets`,`r${idx}-top-markets-section`,g,inputs);return;}}const s=document.getElementById(`r${idx}-top-markets-section`);if(s)s.classList.add('hidden');}
 function computeNoDataSections(eoc){eoc.noDataSections=new Set();const inputs=(eoc.validation&&eoc.validation.summary_inputs)||{};for(const[sid,keys]of Object.entries(SECTION_DATA_REQUIREMENTS)){if(!keys.some(k=>{const v=inputs[k];return Array.isArray(v)?v.length>0:!!v;}))eoc.noDataSections.add(sid);}}

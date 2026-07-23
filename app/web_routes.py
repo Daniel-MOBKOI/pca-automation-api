@@ -270,25 +270,33 @@ EXEC_SUMMARY_MAX_CHARS = 550
 
 
 def _truncate_to_sentence(text: str, max_chars: int) -> str:
-    """Truncate at a sentence boundary if possible, otherwise at a word."""
+    """Truncate at a sentence boundary if possible, otherwise at a word.
+
+    Checks Japanese sentence-ending punctuation (。！？) as well as English,
+    since Japanese summaries have no spaces for the word-boundary fallback.
+    """
     if len(text) <= max_chars:
         return text
     chunk = text[:max_chars]
-    for punct in (". ", "! ", "? "):
+    for punct in (". ", "! ", "? ", "。", "！", "？"):
         pos = chunk.rfind(punct)
         if pos > max_chars // 2:
-            return chunk[: pos + 1].rstrip()
+            return chunk[: pos + len(punct)].rstrip()
     pos = chunk.rfind(" ")
     return (chunk[:pos] if pos > 0 else chunk).rstrip()
 
 
-async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
+async def _claude_exec_summary(summary_inputs: Dict[str, Any], language: str = "en") -> Optional[str]:
     """
     Ask Claude to write a single-paragraph exec summary from validated EOC data.
 
     Returns the summary string on success, or None on any failure
     (no API key, network error, malformed response, etc). Callers should
     treat None as the signal to fall back to JS template summaries.
+
+    language: "en" (default) or "ja". When "ja", asks Claude to write the
+    summary in natural Japanese business tone rather than translating a
+    fixed English template.
     """
     if not ANTHROPIC_API_KEY:
         # Useful breadcrumb in Render logs if Claude integration silently
@@ -309,7 +317,7 @@ async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
     if i.get("ctr"):                   data_lines.append(f"CTR: {i['ctr']}")
     if i.get("engagement_rate"):       data_lines.append(f"Engagement rate: {i['engagement_rate']}")
     if i.get("vcr"):                   data_lines.append(f"VCR: {i['vcr']}")
-    if i.get("on_screen_rate"):        data_lines.append(f"On-screen rate: {i['on_screen_rate']}")
+    if i.get("on_screen_rate"):        data_lines.append(f"{i.get('on_screen_rate_label') or 'On-screen rate'}: {i['on_screen_rate']}")
     if i.get("budget"):                data_lines.append(f"Budget: {i['budget']}")
     if i.get("delivery_incl_av"):      data_lines.append(f"Delivery incl. AV: {i['delivery_incl_av']}")
     if i.get("added_value_worth"):     data_lines.append(f"Added value: {i['added_value_worth']}")
@@ -331,12 +339,20 @@ async def _claude_exec_summary(summary_inputs: Dict[str, Any]) -> Optional[str]:
         # No useful data at all — Claude won't have anything to write about.
         return None
 
+    language_instruction = (
+        "Write the paragraph in natural, business-appropriate Japanese (日本語), "
+        "as a senior Japanese account manager would write it for a client — not a "
+        "literal translation of an English template. "
+        if language == "ja" else ""
+    )
+
     prompt = (
         "You are writing the executive summary for a premium digital advertising "
         "post-campaign analysis (PCA) report. Write a single, fluent paragraph of "
         "3-4 sentences that a senior account manager would be proud to send to a client. "
         "The tone should be confident, human, and results-focused — not corporate or "
         "template-sounding. Highlight the standout metrics and top performers naturally. "
+        f"{language_instruction}"
         "Keep the paragraph under 500 characters. "
         "Do not use bullet points, headers, or markdown. Output only the paragraph, nothing else.\n\n"
         "Campaign data:\n" + "\n".join(data_lines)
@@ -747,7 +763,7 @@ async def api_validate(request: Request, eoc_file: UploadFile = File(...)):
 async def api_exec_summary(request: Request):
     """
     Regenerate a Claude exec summary on demand.
-    Accepts JSON body: { "summary_inputs": { ... } }
+    Accepts JSON body: { "summary_inputs": { ... }, "language": "en" | "ja" }
     Returns: { "summary": "..." } on success, or { "summary": null } on
     any failure so the frontend can fall back to JS templates.
     """
@@ -757,7 +773,8 @@ async def api_exec_summary(request: Request):
     except Exception:
         body = {}
     summary_inputs = (body or {}).get("summary_inputs") or {}
-    summary = await _claude_exec_summary(summary_inputs)
+    language = (body or {}).get("language") or "en"
+    summary = await _claude_exec_summary(summary_inputs, language=language)
     return JSONResponse({"summary": summary})
 
 
@@ -770,6 +787,8 @@ def api_generate(
     deck_mode: str = Form("matching"),
     custom_deck_sections: str = Form("[]"),
     exec_summary: str = Form(""),
+    language: str = Form("en"),
+    currency: str = Form(""),
 ):
     user = require_user(request)
 
@@ -781,6 +800,9 @@ def api_generate(
         build_grouped_stacked_modular_ppt,
         build_filtered_slide_deck_ppt,
         SlideDeckFromEocRequest,
+        template_path_for,
+        MODULAR_TEMPLATE_PATH,
+        SLIDE_DECK_TEMPLATE_PATH,
     )
 
     try:
@@ -803,7 +825,11 @@ def api_generate(
 
         try:
             sheets = read_uploaded_eoc(eoc_path)
-            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+            parsed = build_mapped_values(
+                sheets,
+                filename=eoc_path.name,
+                currency_override=currency or None,
+            )
         except Exception as exc:
             traceback.print_exc()
             _record_failed_run(run_id, user["email"], eoc_file.filename, output_type)
@@ -824,6 +850,7 @@ def api_generate(
                 op_result = build_grouped_stacked_modular_ppt(
                     selected_sections=section_list,
                     placeholder_values=mapped_values,
+                    template_path=template_path_for(MODULAR_TEMPLATE_PATH, language),
                 )
                 original = Path(op_result["filename"]).name
                 new_name = _smart_filename(campaign_name, "One_Pager")
@@ -841,6 +868,7 @@ def api_generate(
                 deck_result = build_filtered_slide_deck_ppt(
                     request=deck_request,
                     placeholder_values=mapped_values,
+                    template_path=template_path_for(SLIDE_DECK_TEMPLATE_PATH, language),
                 )
                 original = Path(deck_result["filename"]).name
                 new_name = _smart_filename(campaign_name, "Slide_Deck")
