@@ -466,9 +466,9 @@ function renderActivePanel() {
 
       <div class="mb-8">
         <div class="text-sm font-medium mb-3">Currency</div>
-        <div class="grid grid-cols-4 gap-3" id="currency-chips-${idx}">
-          ${['€','$','£','¥'].map(val => {
-            const labels={'€':'EUR','$':'USD','£':'GBP','¥':'JPY'};
+        <div class="grid grid-cols-5 gap-3" id="currency-chips-${idx}">
+          ${['€','$','£','¥','S$'].map(val => {
+            const labels={'€':'EUR','$':'USD','£':'GBP','¥':'JPY','S$':'SGD'};
             const sel = eoc.currency === val;
             return `<label class="output-chip ${sel?'selected':''}" data-currency="${val}" onclick="setCurrency(${idx},'${val}',this)">
               <input type="radio" name="currency_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>

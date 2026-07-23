@@ -197,7 +197,9 @@ def clean_dimension_label(value: Any) -> str:
     return value.strip(" -")
 
 
-CURRENCY_SYMBOLS = ["£", "$", "€", "¥"]
+# Order matters: "S$" must be checked before the plain "$" it contains,
+# otherwise a Singapore dollar value/format would always match as USD first.
+CURRENCY_SYMBOLS = ["S$", "£", "$", "€", "¥"]
 
 
 def detect_currency_symbol(value: Any) -> Optional[str]:
@@ -260,6 +262,7 @@ def safe_number(value: Any) -> Optional[float]:
         if isinstance(value, str):
             value = (
                 value.replace(",", "")
+                .replace("S$", "")  # must strip before the bare $ it contains
                 .replace("£", "")
                 .replace("$", "")
                 .replace("€", "")
