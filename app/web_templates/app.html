@@ -154,6 +154,11 @@
   pointer-events: none;
 }
 .exec-ta-spinner.visible { display: flex; }
+
+/* ---- Currency chips: smaller than the output/language chips they share
+   .output-chip styling with (border, hover, selected state) — the combined
+   selector below only overrides padding, so Output Type/Language stay as-is. */
+.output-chip.currency-chip { padding: 8px 10px; }
 </style>
 
 <script>
@@ -182,6 +187,7 @@ function makeEoc(file) {
     language: 'en',
     currency: 'auto',
     currencyUserSet: false,
+    marketsOverride: null,
     selectedSections: new Set(),
     selectedDeckSections: new Set(),
     deckMode: 'matching',
@@ -366,9 +372,12 @@ function renderReviewCard(eoc, idx) {
   if (!eoc.currencyUserSet && inputs.campaign_currency) eoc.currency = inputs.campaign_currency;
   const di = Object.assign({}, inputs);
   if (di.live_dates) di.live_dates = compactDateRange(di.live_dates);
-  renderTilesTo(`r${idx}-campaign`, [{key:'campaign_name',label:'Campaign'},{key:'client',label:'Client'},{key:'markets',label:'Markets'},{key:'live_dates',label:'Live Dates'}], di);
-  renderTilesTo(`r${idx}-performance`, [{key:'ctr',label:'CTR'},{key:'engagement_rate',label:'Engagement Rate'},{key:'vcr',label:'VCR'},{key:'on_screen_rate',label:'On-Screen Rate'}], di);
-  renderTilesTo(`r${idx}-delivery`, [{key:'delivered_impressions',label:'Impressions'},{key:'budget',label:'Budget'},{key:'delivery_incl_av',label:'Delivery (incl. AV)'},{key:'added_value_worth',label:'Added Value'}], di);
+  // A manually-typed Markets value (filled in when the EOC had none) takes
+  // over the tile display; it's also what gets sent to /api/generate.
+  if (eoc.marketsOverride) di.markets = eoc.marketsOverride;
+  renderTilesTo(`r${idx}-campaign`, [{key:'campaign_name',label:'Campaign'},{key:'client',label:'Client'},{key:'markets',label:'Markets',editable:true},{key:'live_dates',label:'Live Dates'}], di, idx);
+  renderTilesTo(`r${idx}-performance`, [{key:'ctr',label:'CTR'},{key:'engagement_rate',label:'Engagement Rate'},{key:'vcr',label:'VCR'},{key:'on_screen_rate',label:'On-Screen Rate'}], di, idx);
+  renderTilesTo(`r${idx}-delivery`, [{key:'delivered_impressions',label:'Impressions'},{key:'budget',label:'Budget'},{key:'delivery_incl_av',label:'Delivery (incl. AV)'},{key:'added_value_worth',label:'Added Value'}], di, idx);
   renderTopGroupsTo(`r${idx}-top-performers`,`r${idx}-top-performers-section`,[{key:'top_ctr',title:'CTR'},{key:'top_engagement_rate',title:'Engagement Rate'},{key:'top_vcr',title:'VCR'}],inputs);
   renderTopMarketsFor(idx, inputs);
   document.getElementById(`r${idx}-warnings`).innerHTML = Object.keys(inputs).length === 0
@@ -470,10 +479,9 @@ function renderActivePanel() {
           ${['€','$','£','¥','S$'].map(val => {
             const labels={'€':'EUR','$':'USD','£':'GBP','¥':'JPY','S$':'SGD'};
             const sel = eoc.currency === val;
-            return `<label class="output-chip ${sel?'selected':''}" data-currency="${val}" onclick="setCurrency(${idx},'${val}',this)">
+            return `<label class="output-chip currency-chip ${sel?'selected':''}" data-currency="${val}" onclick="setCurrency(${idx},'${val}',this)">
               <input type="radio" name="currency_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>
-              <div class="text-lg leading-none">${val}</div>
-              <div class="text-sm mt-2 ${sel?'font-medium':''}">${labels[val]}</div>
+              <div class="text-sm whitespace-nowrap ${sel?'font-medium':''}">${val} - ${labels[val]}</div>
             </label>`;
           }).join('')}
         </div>
@@ -819,6 +827,7 @@ async function generateOne(eoc,idx) {
   // 'auto' means no manual override — let the backend use whatever currency
   // it detects from the EOC file itself (defaulting to $ if none found).
   fd.append('currency',(eoc.currency&&eoc.currency!=='auto')?eoc.currency:'');
+  fd.append('markets_override',eoc.marketsOverride||'');
   try {
     const res=await fetch('/api/generate',{method:'POST',body:fd});
     if(!res.ok){const err=await res.json().catch(()=>({detail:'Generation failed'}));throw new Error(err.detail||'Generation failed');}
@@ -850,7 +859,46 @@ function showDone(results) {
 // ============================================================
 // SHARED RENDERERS + UTILITIES
 // ============================================================
-function renderTilesTo(id,fields,inputs){const el=document.getElementById(id);if(!el)return;el.innerHTML='';fields.forEach(f=>{const v=inputs[f.key];if(v){const label=inputs[f.key+'_label']||f.label;el.insertAdjacentHTML('beforeend',`<div class="metric-tile"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(v)}</div></div>`);}});}
+function renderTilesTo(id,fields,inputs,idx){const el=document.getElementById(id);if(!el)return;el.innerHTML='';fields.forEach(f=>{const v=inputs[f.key];if(!v)return;const label=inputs[f.key+'_label']||f.label;if(f.key==='markets'&&f.editable){
+  el.insertAdjacentHTML('beforeend',`<div class="metric-tile" id="market-tile-${idx}">
+    <div class="label">${escapeHtml(label)}</div>
+    <div class="value flex items-center gap-1.5">
+      <span>${escapeHtml(v)}</span>
+      <button type="button" class="text-gray-400 hover:text-blue-600 shrink-0" onclick="startMarketsEdit(${idx})" title="Edit markets">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+      </button>
+    </div>
+  </div>`);
+  return;
+}
+el.insertAdjacentHTML('beforeend',`<div class="metric-tile"><div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(v)}</div></div>`);});}
+
+function startMarketsEdit(idx){
+  const tile=document.getElementById(`market-tile-${idx}`);
+  if(!tile)return;
+  const eoc=state.eocs[idx];
+  const current=eoc.marketsOverride||'';
+  tile.innerHTML=`
+    <div class="label">Markets</div>
+    <div class="flex items-center gap-2 mt-1">
+      <input type="text" id="market-edit-input-${idx}" value="${escapeHtml(current)}" placeholder="e.g. FR, DE, UK"
+        class="flex-1 min-w-0 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+        onkeydown="if(event.key==='Enter')saveMarketsEdit(${idx});if(event.key==='Escape')renderReviewCard(state.eocs[${idx}],${idx});"/>
+      <button type="button" class="text-blue-600 text-xs font-medium hover:underline shrink-0" onclick="saveMarketsEdit(${idx})">Save</button>
+      <button type="button" class="text-gray-400 text-xs hover:underline shrink-0" onclick="renderReviewCard(state.eocs[${idx}],${idx})">Cancel</button>
+    </div>`;
+  const input=document.getElementById(`market-edit-input-${idx}`);
+  input.focus();
+  input.select();
+}
+
+function saveMarketsEdit(idx){
+  const input=document.getElementById(`market-edit-input-${idx}`);
+  const val=(input.value||'').trim();
+  if(!val)return;
+  state.eocs[idx].marketsOverride=val;
+  renderReviewCard(state.eocs[idx],idx);
+}
 function renderTopGroupsTo(cid,sid,groups,inputs){const c=document.getElementById(cid);if(!c)return;c.innerHTML='';let any=false;groups.forEach(g=>{const l=inputs[g.key];if(Array.isArray(l)&&l.length){any=true;const rows=l.map(i=>`<div class="row"><span class="name">${escapeHtml(i.name||'—')}</span><span class="val">${escapeHtml(i.value||'—')}</span></div>`).join('');c.insertAdjacentHTML('beforeend',`<div class="top-col"><h5>${escapeHtml(g.title)}</h5>${rows}</div>`);}});const s=document.getElementById(sid);if(s)s.classList.toggle('hidden',!any);}
 function renderTopMarketsFor(idx,inputs){const candidates=[[{key:'top_ctr_markets',title:'CTR'},{key:'top_engagement_rate_markets',title:'Engagement Rate'},{key:'top_vcr_markets',title:'VCR'}],[{key:'top_ctr_market',title:'CTR'},{key:'top_engagement_rate_market',title:'Engagement Rate'},{key:'top_vcr_market',title:'VCR'}],[{key:'top_markets_ctr',title:'CTR'},{key:'top_markets_engagement_rate',title:'Engagement Rate'},{key:'top_markets_vcr',title:'VCR'}],[{key:'market_top_ctr',title:'CTR'},{key:'market_top_engagement_rate',title:'Engagement Rate'},{key:'market_top_vcr',title:'VCR'}]];for(const g of candidates){if(g.some(x=>Array.isArray(inputs[x.key])&&inputs[x.key].length)){renderTopGroupsTo(`r${idx}-top-markets`,`r${idx}-top-markets-section`,g,inputs);return;}}const s=document.getElementById(`r${idx}-top-markets-section`);if(s)s.classList.add('hidden');}
 function computeNoDataSections(eoc){eoc.noDataSections=new Set();const inputs=(eoc.validation&&eoc.validation.summary_inputs)||{};for(const[sid,keys]of Object.entries(SECTION_DATA_REQUIREMENTS)){if(!keys.some(k=>{const v=inputs[k];return Array.isArray(v)?v.length>0:!!v;}))eoc.noDataSections.add(sid);}}

@@ -789,6 +789,7 @@ def api_generate(
     exec_summary: str = Form(""),
     language: str = Form("en"),
     currency: str = Form(""),
+    markets_override: str = Form(""),
 ):
     user = require_user(request)
 
@@ -837,6 +838,10 @@ def api_generate(
             raise HTTPException(status_code=400, detail=f"Could not read EOC: {exc}")
 
         mapped_values = parsed["mapped_values"]
+        # A manually-typed Markets value (filled in on the Review screen when
+        # the EOC had none) overrides whatever build_mapped_values found.
+        if markets_override.strip():
+            mapped_values["CAMPAIGN_MARKETS"] = markets_override.strip()
         mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(exec_summary, mapped_values)
         summary_blob = compact_parsed_result(parsed)
 
