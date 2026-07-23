@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+import openpyxl
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -212,6 +213,43 @@ def detect_currency_symbol(value: Any) -> Optional[str]:
     for symbol in CURRENCY_SYMBOLS:
         if symbol in value:
             return symbol
+    return None
+
+
+def detect_currency_from_workbook(path: Optional[Path]) -> Optional[str]:
+    """Recover the campaign's currency from the EOC's actual cell formatting.
+
+    Monetary values are almost always entered as real numbers with a currency
+    *number format* applied in Excel (e.g. a cell formatted as "€"#,##0.00),
+    not as text containing the symbol — so pandas' raw values never see the
+    symbol at all, and detect_currency_symbol() alone will miss it. This
+    re-opens the workbook directly with openpyxl and checks each cell's
+    number_format for a currency symbol, which is what Excel actually uses
+    to decide what to display.
+    """
+    if not path:
+        return None
+    try:
+        wb = openpyxl.load_workbook(str(path), data_only=True, read_only=True)
+    except Exception:
+        return None
+
+    try:
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for cell in row:
+                    fmt = cell.number_format or ""
+                    for symbol in CURRENCY_SYMBOLS:
+                        if symbol in fmt:
+                            return symbol
+    except Exception:
+        return None
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
+
     return None
 
 
@@ -1515,6 +1553,7 @@ def build_mapped_values(
     sheets: Dict[str, pd.DataFrame],
     filename: str = "",
     currency_override: Optional[str] = None,
+    eoc_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     rules = load_rules_master()
     detected = detect_tables(sheets)
@@ -1528,15 +1567,22 @@ def build_mapped_values(
     start_dt, end_dt = extract_dates(sheets, detected, filename)
     client_name = extract_client_name(sheets, detected, filename)
 
-    # Currency: prefer an explicit override (from the Customise-tab dropdown),
-    # otherwise detect the symbol from the raw spend/added-value-worth cells
-    # (safe_number() strips these same symbols before parsing to a float, so
-    # we have to look at the pre-stripped raw value), otherwise default to $.
+    # Currency: prefer an explicit override (from the Customise-tab dropdown).
+    # Otherwise try to detect it — first cheaply, by checking whether the raw
+    # spend/added-value-worth cell is text containing a symbol (safe_number()
+    # strips these same symbols before parsing to a float, so we have to look
+    # at the pre-stripped raw value). Most EOCs enter money as real numbers
+    # with a currency *number format* applied instead of literal symbol text,
+    # so if that first check finds nothing, fall back to reading the actual
+    # cell formatting from the workbook via openpyxl. Default to $ if neither
+    # finds anything.
     detected_currency = None
     if kpi_df is not None:
         detected_currency = detect_currency_symbol(extract_kpi_value(kpi_df, "spend"))
     if not detected_currency and delivery_df is not None:
         detected_currency = detect_currency_symbol(extract_kpi_value(delivery_df, "delivered_av_amount"))
+    if not detected_currency and eoc_path is not None:
+        detected_currency = detect_currency_from_workbook(eoc_path)
     campaign_currency = currency_override or detected_currency or "$"
 
     mapped: Dict[str, Any] = {}
@@ -2434,7 +2480,7 @@ async def validate_eoc_endpoint(payload: FileRefsPayload):
             tmp_dir = Path(tmp)
             eoc_path = await download_openai_file(payload.openaiFileIdRefs[0], tmp_dir)
             sheets = read_uploaded_eoc(eoc_path)
-            result = build_mapped_values(sheets, filename=eoc_path.name)
+            result = build_mapped_values(sheets, filename=eoc_path.name, eoc_path=eoc_path)
 
         return JSONResponse(content={
             "status": "validated",
@@ -2503,7 +2549,7 @@ async def create_modular_one_pager_from_eoc(request: ModularOnePagerFromEocReque
             tmp_dir = Path(tmp)
             eoc_path = await download_openai_file(request.openaiFileIdRefs[0], tmp_dir)
             sheets = read_uploaded_eoc(eoc_path)
-            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+            parsed = build_mapped_values(sheets, filename=eoc_path.name, eoc_path=eoc_path)
 
         mapped_values = parsed["mapped_values"]
         mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(request.exec_summary, mapped_values)
@@ -2554,7 +2600,7 @@ async def create_modular_one_pager_from_eoc_file_response(request: ModularOnePag
             tmp_dir = Path(tmp)
             eoc_path = await download_openai_file(request.openaiFileIdRefs[0], tmp_dir)
             sheets = read_uploaded_eoc(eoc_path)
-            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+            parsed = build_mapped_values(sheets, filename=eoc_path.name, eoc_path=eoc_path)
 
         mapped_values = parsed["mapped_values"]
         mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(request.exec_summary, mapped_values)
@@ -2625,7 +2671,7 @@ async def generate_slide_deck(request: SlideDeckFromEocRequest):
             tmp_dir = Path(tmp)
             eoc_path = await download_openai_file(request.openaiFileIdRefs[0], tmp_dir)
             sheets = read_uploaded_eoc(eoc_path)
-            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+            parsed = build_mapped_values(sheets, filename=eoc_path.name, eoc_path=eoc_path)
 
         mapped_values = parsed["mapped_values"]
         mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(request.exec_summary, mapped_values)
@@ -2672,7 +2718,7 @@ async def generate_slide_deck_file_response(request: SlideDeckFromEocRequest):
             tmp_dir = Path(tmp)
             eoc_path = await download_openai_file(request.openaiFileIdRefs[0], tmp_dir)
             sheets = read_uploaded_eoc(eoc_path)
-            parsed = build_mapped_values(sheets, filename=eoc_path.name)
+            parsed = build_mapped_values(sheets, filename=eoc_path.name, eoc_path=eoc_path)
 
         mapped_values = parsed["mapped_values"]
         mapped_values["EXEC_SUMMARY"] = resolve_exec_summary_for_ppt(request.exec_summary, mapped_values)

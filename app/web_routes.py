@@ -718,7 +718,7 @@ def _parse_eoc_for_validation(eoc_path: Path) -> Dict[str, Any]:
         compact_parsed_result,
     )
     sheets = read_uploaded_eoc(eoc_path)
-    parsed = build_mapped_values(sheets, filename=eoc_path.name)
+    parsed = build_mapped_values(sheets, filename=eoc_path.name, eoc_path=eoc_path)
     return compact_parsed_result(parsed)
 
 
@@ -829,6 +829,7 @@ def api_generate(
                 sheets,
                 filename=eoc_path.name,
                 currency_override=currency or None,
+                eoc_path=eoc_path,
             )
         except Exception as exc:
             traceback.print_exc()

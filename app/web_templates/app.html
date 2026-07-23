@@ -428,7 +428,7 @@ function renderActivePanel() {
 
   container.innerHTML = `
     <div class="card-elev p-8 ${flushClass}">
-      <div class="grid grid-cols-4 gap-6 mb-8">
+      <div class="grid grid-cols-3 gap-6 mb-8">
         <div class="col-span-2">
           <div class="text-sm font-medium mb-3">What Should I Build?</div>
           <div class="grid grid-cols-3 gap-3" id="output-chips-${idx}">
@@ -462,19 +462,20 @@ function renderActivePanel() {
             }).join('')}
           </div>
         </div>
-        <div class="col-span-1">
-          <div class="text-sm font-medium mb-3">Currency</div>
-          <div class="grid grid-cols-2 gap-3" id="currency-chips-${idx}">
-            ${['€','$','£','¥'].map(val => {
-              const labels={'€':'EUR','$':'USD','£':'GBP','¥':'JPY'};
-              const sel = eoc.currency === val;
-              return `<label class="output-chip ${sel?'selected':''}" data-currency="${val}" onclick="setCurrency(${idx},'${val}',this)">
-                <input type="radio" name="currency_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>
-                <div class="text-lg leading-none">${val}</div>
-                <div class="text-sm mt-2 ${sel?'font-medium':''}">${labels[val]}</div>
-              </label>`;
-            }).join('')}
-          </div>
+      </div>
+
+      <div class="mb-8">
+        <div class="text-sm font-medium mb-3">Currency</div>
+        <div class="grid grid-cols-4 gap-3" id="currency-chips-${idx}">
+          ${['€','$','£','¥'].map(val => {
+            const labels={'€':'EUR','$':'USD','£':'GBP','¥':'JPY'};
+            const sel = eoc.currency === val;
+            return `<label class="output-chip ${sel?'selected':''}" data-currency="${val}" onclick="setCurrency(${idx},'${val}',this)">
+              <input type="radio" name="currency_${idx}" value="${val}" class="hidden" ${sel?'checked':''}/>
+              <div class="text-lg leading-none">${val}</div>
+              <div class="text-sm mt-2 ${sel?'font-medium':''}">${labels[val]}</div>
+            </label>`;
+          }).join('')}
         </div>
       </div>
 
