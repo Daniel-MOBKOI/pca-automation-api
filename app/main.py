@@ -16,7 +16,7 @@ import httpx
 import openpyxl
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
 
@@ -142,11 +142,7 @@ class SlideDeckFromEocRequest(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {
-        "status": "healthy",
-        "message": "PCA Automation Generator API is running successfully.",
-        "mcp_path": "/mcp"
-    }
+    return RedirectResponse(url="/web")
 
 
 @app.get("/health")
