@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import openpyxl
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from pptx import Presentation
@@ -33,6 +33,21 @@ EMU_PER_PX = 9525
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 app = FastAPI(title="PCA Automation Generator", version=APP_VERSION)
+
+LEGACY_ONRENDER_HOSTNAME = "pca-modular-builder-v12.onrender.com"
+CANONICAL_HOSTNAME = "pca.mobkoi.com"
+
+
+@app.middleware("http")
+async def redirect_legacy_onrender_domain(request: Request, call_next):
+    """Send anyone still using the old onrender.com link to the canonical
+    pca.mobkoi.com domain, preserving the path and query string. Keeps old
+    bookmarks/Slack links from 404ing or hitting cross-domain session/OAuth
+    issues, without needing to disable the onrender.com subdomain in Render."""
+    if request.url.hostname == LEGACY_ONRENDER_HOSTNAME:
+        new_url = request.url.replace(scheme="https", hostname=CANONICAL_HOSTNAME)
+        return RedirectResponse(url=str(new_url), status_code=307)
+    return await call_next(request)
 
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
