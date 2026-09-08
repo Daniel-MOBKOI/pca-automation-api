@@ -1993,16 +1993,54 @@ def replace_placeholders_on_slide(slide, placeholder_values: Dict[str, Any]) -> 
 # ({{CAMPAIGN_NAME}}) designed for a single line, with a subtitle
 # ("PCA Reporting Results" / its JA translation) sitting right underneath
 # it with almost no gap. A long campaign name wraps onto a second line and
-# visually collides with the subtitle. There's no live font metrics
-# available at generation time (server has no Inter/Noto Sans JP installed),
-# so line-wrap is estimated with a character-width heuristic below rather
-# than measured exactly. The constants are deliberately biased to trigger a
-# little early (treat a borderline title as "will wrap") since a slightly
-# looser gap is unnoticeable but a missed overlap isn't.
+# visually collides with the subtitle.
+#
+# Line-wrap is estimated (not measured exactly -- PowerPoint's own layout
+# engine isn't available server-side) using Pillow against a bundled
+# DejaVu Sans Bold ttf (app/fonts/DejaVuSans-Bold.ttf, free/permissive
+# license, chosen because it's proportionally-spaced and widely bundled --
+# unlike a flat per-character guess it correctly gives "iiiii" and "MMMMM"
+# different widths). The title's real typeface is Inter, which runs
+# noticeably more compact than DejaVu Sans Bold -- v1 of this fix used
+# DejaVu's raw width and false-triggered on ordinary one-line titles (e.g.
+# "Rolex The Oscars UK 2026"), pushing the subtitle down for no reason and,
+# on the One Pager, shoving the exec summary into the content below it.
+# INTER_WIDTH_CORRECTION below narrows the DejaVu measurement to
+# approximate Inter's real metrics; it's a calibrated fudge factor, not an
+# exact one (the real Inter font isn't available in this environment to
+# measure directly -- it's embedded, obfuscated, inside the .pptx masters
+# themselves). If a title still visibly wraps unexpectedly (or triggers
+# when it shouldn't), this is the constant to retune -- or better, drop a
+# real Inter TTF/OTF into app/fonts/ and point FONT_PATH at it for exact
+# measurement instead of an approximation.
 # ==================================================
 
-LATIN_CHAR_WIDTH_FACTOR = 0.58  # fraction of font-size (pt) per average Latin/mixed character, for a bold sans headline
-USABLE_BOX_WIDTH_FACTOR = 0.85  # treat only this fraction of the box width as available before wrapping
+FONT_DIR = BASE_DIR / "fonts"
+FONT_PATH = FONT_DIR / "DejaVuSans-Bold.ttf"
+INTER_WIDTH_CORRECTION = 0.85  # DejaVu Sans Bold -> approximate Inter Bold compactness
+TITLE_WRAP_SAFETY_MARGIN_PT = 6.0  # small fixed buffer subtracted from usable width
+
+_TITLE_WRAP_FONT_CACHE: Dict[int, Any] = {}
+
+
+def _title_wrap_measuring_font(font_size_pt: float):
+    """PIL ImageFont for `font_size_pt`, cached per rounded size. Returns
+    None if Pillow or the bundled font aren't available, so callers can
+    fall back gracefully rather than crash generation over a QA nicety.
+    """
+    size_key = max(1, round(font_size_pt))
+    if size_key in _TITLE_WRAP_FONT_CACHE:
+        return _TITLE_WRAP_FONT_CACHE[size_key]
+
+    font = None
+    try:
+        from PIL import ImageFont
+        font = ImageFont.truetype(str(FONT_PATH), size=size_key)
+    except Exception:
+        font = None
+
+    _TITLE_WRAP_FONT_CACHE[size_key] = font
+    return font
 
 
 def shape_max_font_size_pt(shape) -> float:
@@ -2081,25 +2119,72 @@ def find_closest_shape_below(shapes, reference_shape, left_tolerance_emu: int = 
     return best_shape
 
 
-def estimate_wrapped_line_count(text: str, font_size_pt: float, box_width_emu: int) -> int:
-    """Rough estimate of how many lines `text` wraps onto inside a box of
-    box_width_emu at font_size_pt. Heuristic only -- see module note above.
+def _measure_text_width_pt(text: str, font_size_pt: float) -> float:
+    """Estimate the rendered width of `text` at font_size_pt, in points.
+
+    CJK / kana / fullwidth characters are treated as one em (~font size)
+    wide each, which holds true across most CJK typefaces regardless of
+    family. Runs of narrower (Latin/other) characters are measured
+    proportionally against the bundled DejaVu Sans Bold font and then
+    scaled by INTER_WIDTH_CORRECTION to approximate the title's real
+    typeface, Inter -- see the module note above. Falls back to a flat
+    0.55x-font-size-per-character estimate if the font can't be loaded.
+    """
+    if not text or font_size_pt <= 0:
+        return 0.0
+
+    font = _title_wrap_measuring_font(font_size_pt)
+
+    total_pt = 0.0
+    run_chars: List[str] = []
+    run_is_wide: Optional[bool] = None
+
+    def flush_run():
+        nonlocal total_pt
+        if not run_chars:
+            return
+        run_text = "".join(run_chars)
+        if run_is_wide:
+            total_pt += len(run_text) * font_size_pt
+            return
+        if font is not None:
+            measured_at_size = font.getlength(run_text)
+            total_pt += measured_at_size * INTER_WIDTH_CORRECTION
+        else:
+            total_pt += len(run_text) * font_size_pt * 0.55
+
+    for ch in text:
+        is_wide = ord(ch) > 0x2E7F
+        if run_is_wide is None or is_wide == run_is_wide:
+            run_chars.append(ch)
+            run_is_wide = is_wide
+        else:
+            flush_run()
+            run_chars = [ch]
+            run_is_wide = is_wide
+
+    flush_run()
+    return total_pt
+
+
+def estimate_wrapped_line_count(text: str, font_size_pt: float, box_width_emu: int, margin_left_emu: int = 91440, margin_right_emu: int = 91440) -> int:
+    """Estimate how many lines `text` wraps onto inside a box of
+    box_width_emu at font_size_pt, accounting for the text frame's left/right
+    internal margins (PowerPoint's default is 91440 EMU / 0.1in each side)
+    plus a small fixed safety buffer. See module note above -- an estimate,
+    not an exact PowerPoint layout measurement.
     """
     text = (text or "").strip()
     if not text or font_size_pt <= 0 or not box_width_emu:
         return 1
 
     box_width_pt = box_width_emu / EMU_PER_PT
-    usable_width_pt = box_width_pt * USABLE_BOX_WIDTH_FACTOR
+    margins_pt = ((margin_left_emu or 0) + (margin_right_emu or 0)) / EMU_PER_PT
+    usable_width_pt = box_width_pt - margins_pt - TITLE_WRAP_SAFETY_MARGIN_PT
     if usable_width_pt <= 0:
         return 1
 
-    total_width_pt = 0.0
-    for ch in text:
-        # CJK / kana / fullwidth characters render roughly as wide as the
-        # font size; Latin characters in a bold sans headline average narrower.
-        is_wide = ord(ch) > 0x2E7F
-        total_width_pt += font_size_pt * (1.0 if is_wide else LATIN_CHAR_WIDTH_FACTOR)
+    total_width_pt = _measure_text_width_pt(text, font_size_pt)
 
     return max(1, math.ceil(total_width_pt / usable_width_pt))
 
@@ -2116,7 +2201,11 @@ def reflow_title_slide_for_wrapped_title(shapes, title_shape, dependent_shapes, 
         return
 
     font_pt = shape_max_font_size_pt(title_shape) or 36.0
-    line_count = estimate_wrapped_line_count(title_shape.text_frame.text, font_pt, title_shape.width)
+    tf = title_shape.text_frame
+    line_count = estimate_wrapped_line_count(
+        tf.text, font_pt, title_shape.width,
+        margin_left_emu=tf.margin_left, margin_right_emu=tf.margin_right,
+    )
     extra_lines = line_count - baseline_lines
 
     if extra_lines <= 0:
