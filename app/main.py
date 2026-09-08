@@ -30,6 +30,7 @@ PPTX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.p
 MAX_RETURN_FILE_BYTES = 10 * 1024 * 1024
 
 EMU_PER_PX = 9525
+EMU_PER_PT = 12700
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 app = FastAPI(title="PCA Automation Generator", version=APP_VERSION)
@@ -1985,6 +1986,153 @@ def replace_placeholders_on_slide(slide, placeholder_values: Dict[str, Any]) -> 
         replace_text_in_shape(shape, placeholder_values)
 
 
+# ==================================================
+# TITLE SLIDE REFLOW
+# --------------------------------------------------
+# The One Pager and Slide Deck title slides both have a title box
+# ({{CAMPAIGN_NAME}}) designed for a single line, with a subtitle
+# ("PCA Reporting Results" / its JA translation) sitting right underneath
+# it with almost no gap. A long campaign name wraps onto a second line and
+# visually collides with the subtitle. There's no live font metrics
+# available at generation time (server has no Inter/Noto Sans JP installed),
+# so line-wrap is estimated with a character-width heuristic below rather
+# than measured exactly. The constants are deliberately biased to trigger a
+# little early (treat a borderline title as "will wrap") since a slightly
+# looser gap is unnoticeable but a missed overlap isn't.
+# ==================================================
+
+LATIN_CHAR_WIDTH_FACTOR = 0.58  # fraction of font-size (pt) per average Latin/mixed character, for a bold sans headline
+USABLE_BOX_WIDTH_FACTOR = 0.85  # treat only this fraction of the box width as available before wrapping
+
+
+def shape_max_font_size_pt(shape) -> float:
+    """Largest font size (in points) found among a shape's text runs, 0 if none set."""
+    if not hasattr(shape, "text_frame"):
+        return 0.0
+
+    max_pt = 0.0
+    for paragraph in shape.text_frame.paragraphs:
+        for run in paragraph.runs:
+            if run.font.size:
+                max_pt = max(max_pt, run.font.size.pt)
+
+    return max_pt
+
+
+def shape_contains_token(shape, token: str) -> bool:
+    if not hasattr(shape, "text_frame"):
+        return False
+
+    return token in (shape.text_frame.text or "")
+
+
+def find_title_slide_shapes(shapes):
+    """Locate the CAMPAIGN_NAME title, and any shapes that depend on its
+    vertical position (CAMPAIGN_PERIOD, EXEC_SUMMARY), within a
+    TITLE_OVERVIEW slide/section -- before placeholder substitution happens,
+    so the {{...}} tokens are still present to search for. title_shape may
+    be None if not found. Picks the largest-font instance of CAMPAIGN_NAME,
+    since it can also appear as a small detail-table value elsewhere on the
+    same slide (the One Pager's "Campaign:" row).
+
+    dependent_shapes covers both the Slide Deck (title, subtitle, period)
+    and the One Pager (title, subtitle, period above the title -- left
+    alone, exec summary below it) title-slide layouts.
+    """
+    name_candidates = [s for s in shapes if shape_contains_token(s, "{{CAMPAIGN_NAME}}")]
+    title_shape = max(name_candidates, key=shape_max_font_size_pt, default=None)
+
+    period_candidates = [s for s in shapes if shape_contains_token(s, "{{CAMPAIGN_PERIOD}}")]
+    period_shape = period_candidates[0] if period_candidates else None
+
+    exec_candidates = [s for s in shapes if shape_contains_token(s, "{{EXEC_SUMMARY}}")]
+    exec_shape = exec_candidates[0] if exec_candidates else None
+
+    dependent_shapes = [s for s in (period_shape, exec_shape) if s is not None]
+
+    return title_shape, dependent_shapes
+
+
+def find_closest_shape_below(shapes, reference_shape, left_tolerance_emu: int = 150000):
+    """Find the shape positioned directly beneath `reference_shape` (smallest
+    positive vertical gap), constrained to roughly the same left edge so
+    unrelated content elsewhere on a busy slide/section isn't picked up.
+    """
+    if reference_shape is None or reference_shape.top is None:
+        return None
+
+    ref_bottom = reference_shape.top + reference_shape.height
+    best_shape = None
+    best_gap = None
+
+    for shape in shapes:
+        if shape is reference_shape or shape.top is None or shape.left is None:
+            continue
+        if abs(shape.left - reference_shape.left) > left_tolerance_emu:
+            continue
+
+        gap = shape.top - ref_bottom
+        if gap < 0:
+            continue
+        if best_gap is None or gap < best_gap:
+            best_gap = gap
+            best_shape = shape
+
+    return best_shape
+
+
+def estimate_wrapped_line_count(text: str, font_size_pt: float, box_width_emu: int) -> int:
+    """Rough estimate of how many lines `text` wraps onto inside a box of
+    box_width_emu at font_size_pt. Heuristic only -- see module note above.
+    """
+    text = (text or "").strip()
+    if not text or font_size_pt <= 0 or not box_width_emu:
+        return 1
+
+    box_width_pt = box_width_emu / EMU_PER_PT
+    usable_width_pt = box_width_pt * USABLE_BOX_WIDTH_FACTOR
+    if usable_width_pt <= 0:
+        return 1
+
+    total_width_pt = 0.0
+    for ch in text:
+        # CJK / kana / fullwidth characters render roughly as wide as the
+        # font size; Latin characters in a bold sans headline average narrower.
+        is_wide = ord(ch) > 0x2E7F
+        total_width_pt += font_size_pt * (1.0 if is_wide else LATIN_CHAR_WIDTH_FACTOR)
+
+    return max(1, math.ceil(total_width_pt / usable_width_pt))
+
+
+def reflow_title_slide_for_wrapped_title(shapes, title_shape, dependent_shapes, baseline_lines: int = 1) -> None:
+    """Call after CAMPAIGN_NAME has been substituted into `title_shape`. If
+    the final text is estimated to wrap onto more lines than the template
+    was designed for, push the subtitle (closest shape below the title) and
+    every shape in `dependent_shapes` down by the same amount, so nothing
+    overlaps. Anything positioned above the title (e.g. the One Pager's
+    period label, which sits above its title there) is left untouched.
+    """
+    if title_shape is None or not hasattr(title_shape, "text_frame"):
+        return
+
+    font_pt = shape_max_font_size_pt(title_shape) or 36.0
+    line_count = estimate_wrapped_line_count(title_shape.text_frame.text, font_pt, title_shape.width)
+    extra_lines = line_count - baseline_lines
+
+    if extra_lines <= 0:
+        return
+
+    extra_height = extra_lines * int(font_pt * 1.2 * EMU_PER_PT)
+
+    subtitle_shape = find_closest_shape_below(shapes, title_shape)
+    if subtitle_shape is not None:
+        subtitle_shape.top = subtitle_shape.top + extra_height
+
+    for dependent_shape in dependent_shapes:
+        if dependent_shape is not None and dependent_shape.top is not None and dependent_shape.top > title_shape.top:
+            dependent_shape.top = dependent_shape.top + extra_height
+
+
 def create_output_presentation_with_source_theme(source_template_path: Path, slide_height: int) -> Presentation:
     output_prs = Presentation(str(source_template_path))
     output_prs.slide_height = slide_height
@@ -2160,6 +2308,7 @@ def build_grouped_stacked_modular_ppt(
 
     cursor_y = top_margin
     built_sections = []
+    title_overview_group = None
 
     for section in section_data:
         section_id = section["section_id"]
@@ -2170,13 +2319,16 @@ def build_grouped_stacked_modular_ppt(
             slide_width=slide_width
         )
 
-        copy_group_to_slide_relationship_safe(
+        copied_shape = copy_group_to_slide_relationship_safe(
             source_shape=section["shape"],
             source_slide=section["slide"],
             target_slide=output_slide,
             new_left=section_left,
             new_top=cursor_y
         )
+
+        if section_id == "TITLE_OVERVIEW":
+            title_overview_group = copied_shape
 
         built_sections.append({
             "section_id": section_id,
@@ -2189,7 +2341,19 @@ def build_grouped_stacked_modular_ppt(
 
         cursor_y += section["height"] + spacing
 
+    # Identify the campaign-name title (and shapes that depend on its
+    # position, e.g. campaign-period, exec summary) before substitution
+    # replaces their {{...}} tokens with real text, so a wrapped title can
+    # be detected and the subtitle/dependents pushed clear of it afterwards.
+    title_shape = None
+    dependent_shapes = []
+    if title_overview_group is not None and hasattr(title_overview_group, "shapes"):
+        title_shape, dependent_shapes = find_title_slide_shapes(title_overview_group.shapes)
+
     replace_placeholders_on_slide(output_slide, placeholder_values or {})
+
+    if title_overview_group is not None and title_shape is not None:
+        reflow_title_slide_for_wrapped_title(title_overview_group.shapes, title_shape, dependent_shapes)
 
     campaign_name = clean_text(placeholder_values.get("CAMPAIGN_NAME")) if placeholder_values else ""
     safe_campaign = safe_filename(campaign_name or "Campaign")
@@ -2443,7 +2607,21 @@ def build_filtered_slide_deck_ppt(
     # Remove helper labels after filtering, so they never appear in final output.
     remove_section_id_text_boxes_from_deck(prs)
 
+    # Identify each slide's campaign-name title (and campaign-period) shapes
+    # before substitution replaces their {{...}} tokens with real text, so a
+    # wrapped title (e.g. the cover slide) can be detected and the subtitle
+    # pushed clear of it afterwards. Only the title/cover slide will actually
+    # have a match; other slides yield (None, None) and are skipped below.
+    title_slide_shapes = [
+        (slide, *find_title_slide_shapes(slide.shapes))
+        for slide in prs.slides
+    ]
+
     replace_placeholders_in_presentation(prs, placeholder_values or {})
+
+    for slide, title_shape, dependent_shapes in title_slide_shapes:
+        if title_shape is not None:
+            reflow_title_slide_for_wrapped_title(slide.shapes, title_shape, dependent_shapes)
 
     campaign_name = clean_text(placeholder_values.get("CAMPAIGN_NAME")) if placeholder_values else ""
     safe_campaign = safe_filename(campaign_name or "Campaign")

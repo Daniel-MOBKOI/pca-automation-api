@@ -205,6 +205,7 @@ Render disk attached: 5GB at `/var/data` (resized from 1GB on 12 Aug 2026 — se
 - [ ] Confirm the JA wiring fix above actually produces a Japanese-templated deck + Japanese-toned summary when tested live (was fixed based on code inspection, not yet verified against a real generate call).
 - [ ] Get Daniel's preferred Japanese phrase for "MRC Viewability" so the JA Slide Deck template's fallback label can be updated to match the English one.
 - [ ] All of Round 6 (decimal fix, MRC rename, JA wiring fix, currency) needs a real local/staging test before pushing to `main` — none of it has been run against the live app yet, only verified via isolated logic tests and syntax checks (couldn't run the full FastAPI app in this sandbox — its SQLite init fails outside Daniel's actual environment).
+- [ ] Round 9's title-wrap fix needs a real generate-through-the-web-app test with a genuinely long campaign name (both One Pager and Slide Deck, EN + JA) before trusting it live — verified via direct calls to the generation functions in this session, not through the running app.
 
 **Full Phase 1 feedback doc (read 23 July 2026 via shared Google Doc link, "PCA Generator - Feedback")** — collects notes from every regional office. Items marked "Actioned" in the doc that match this session's Round 6 work: Lesan/Yuri/Zoe's currency feedback (default-to-campaign-currency, JPY, SGD/USD), Yuri's OnScreen/MRC Viewability naming, Zoe's "AV delivery shows 1.54% instead of 154%". One Actioned item in the doc that we have **not** touched this session and should verify: Yuri's "Front Page: the layout looks broken" — worth confirming whether this was fixed separately or the doc is stale on this one.
 
@@ -290,6 +291,20 @@ Genuinely open items from the doc, not yet actioned:
 
 ---
 
+## Round 9 (title-slide wrap/overlap fix, 8 Sep 2026 — code done, not yet committed/pushed)
+
+- **Bug (reported by Daniel, screenshot of the Slide Deck JA cover slide):** the title slide's `{{CAMPAIGN_NAME}}` text box was designed for one line, with the "PCA Reporting Results" / JA subtitle sitting right underneath with almost no gap. A campaign name long enough to wrap onto a second line visually covers the subtitle. Same tight-gap design exists on the One Pager's title block too (title → subtitle → exec summary), just not what Daniel's screenshot showed.
+- ✅ **Fixed in `app/main.py`** — no template file changes needed, since this only affects runtime-generated output, not the editable masters. Added:
+  - `find_title_slide_shapes()` — locates the CAMPAIGN_NAME title (the large-font instance; it also appears small in the One Pager's detail table) and any shapes that depend on its position (CAMPAIGN_PERIOD, EXEC_SUMMARY), by their `{{...}}` tokens, **before** substitution replaces those tokens.
+  - `estimate_wrapped_line_count()` — heuristic line-wrap estimate (character-width by Latin vs CJK, since there's no real font metrics available server-side — Inter/Noto Sans JP aren't installed in the generation environment). Deliberately biased to trigger a little early (`LATIN_CHAR_WIDTH_FACTOR = 0.58`, `USABLE_BOX_WIDTH_FACTOR = 0.85`) — a slightly looser gap is unnoticeable, a missed overlap isn't.
+  - `reflow_title_slide_for_wrapped_title()` — after CAMPAIGN_NAME is substituted, if the estimate says it wraps past 1 line, pushes the subtitle (closest shape below the title) and any dependent shapes below the title down by the same amount, preserving their original relative spacing rather than closing the gap.
+  - Wired into both `build_grouped_stacked_modular_ppt` (One Pager) and `build_filtered_slide_deck_ppt` (Slide Deck) — covers both output types, EN and JA, since it's the same generation code path.
+- **Verified** (see below) against both real builder functions, both templates, both languages: short titles produce byte-identical output to before (no regression); titles estimated at 2 and 3 lines shift the subtitle/period/exec-summary down cleanly with no new overlaps introduced (checked the One Pager's exec-summary-vs-next-content-block gap too, since that's the one place a naive fix could trade one overlap for another).
+- **Caveat:** this is a heuristic, not exact text measurement (no bundled Inter/Noto Sans JP font to measure against). It should be right for the vast majority of real campaign names, but if a title still overlaps in practice, or the subtitle shifts down when it didn't need to, tune `LATIN_CHAR_WIDTH_FACTOR` / `USABLE_BOX_WIDTH_FACTOR` at the top of the "TITLE SLIDE REFLOW" block in `main.py`.
+- **Not yet done:** code change is sitting locally, uncommitted (Daniel's standing rule — commits/pushes are his own step). Needs a real generate-through-the-web-app test with an actual long campaign name before it's confirmed live, same as the other untested Round 6 items above.
+
+---
+
 ## Latest verified state
 
 - **Commit:** `41c8382` (4 June 2026) — **Round 7 changes above are committed locally but the exact new commit hash is not yet known; update this once pushed.**
@@ -300,4 +315,4 @@ Genuinely open items from the doc, not yet actioned:
 - **`app/web_templates/landing.html`:** v3
 - **`app/web_templates/denied.html`:** v2
 - **`app/web_templates/app.html`:** language selector + word-by-word typewriter shipped; no version comment in file to confirm exact version number
-- **`app/main.py`:** `template_path_for()` JA helper shipped; otherwise untouched aside from the 2-line web-routes hook
+- **`app/main.py`:** `template_path_for()` JA helper shipped; Round 9 added the title-slide reflow fix (`find_title_slide_shapes`, `estimate_wrapped_line_count`, `reflow_title_slide_for_wrapped_title`), wired into both PPT builders — not yet committed/pushed
